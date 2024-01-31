@@ -10,9 +10,150 @@ from trl import (
     RewardConfig,
     RewardTrainer,
 )
-from typing import Optional, List, Literal
+from typing import Callable, Optional, Dict, Sequence, List, Literal, Tuple
 from datasets import load_dataset
 from peft import LoraConfig
+from torch.utils.data import Dataset
+import json
+from PIL import Image
+import os
+import pandas as pd
+import requests
+
+starting_prompt = """
+A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
+"""
+
+
+def value_prompt(captions):
+    caption_string = ""
+    for caption in captions:
+        caption_string += f"{caption}\n"
+    return f"""
+USER: Please evaluate the quality of your last response. There are several dimensions you should consider in your evaluation:
+
+1. Accurate: The AI should provide factual and accurate information from the image, and refrain from making statements that are not supported by the image or inconsistent with the image. Specifically, the AI's response should be fully supported by the combination of the following captions:
+{caption_string}
+2. Helpful: The AI’s response should precisely serve the user's needs and interests, while grounding the response in the image.
+3. Language Natural: The AI should employ language that flows smoothly and is free from repetitive or awkward constructs.
+4. Concise: The AI should efficiently address the task or answer the question, communicating the necessary information with brevity and clarity.
+
+A good response should be accurate, helpful, language natural, and concise. ASSISTANT: Following your definitions, the quality score of my last response is
+  """
+
+
+# class BinaryRewardModelingDataset(Dataset):
+#     def __init__(
+#         self,
+#         data: Sequence[dict],
+#         tokenizer: transformers.PreTrainedTokenizer,
+#         df_postprocessor: Optional[Callable] = None,
+#         query_len: Optional[int] = None,
+#         response_len: Optional[int] = None,
+#         use_data_frame: bool = True,
+#         data_args: Optional[Dict] = None,
+#     ):
+#         super(BinaryRewardModelingDataset, self).__init__()
+#         list_data_dict = json.load(open(data_args.dataset_path, "r"))
+#         self.tokenizer = tokenizer
+#         self.list_data_dict = list_data_dict
+#         self.data_args = data_args
+
+#         self.query_len = query_len
+#         self.response_len = response_len
+#         self.use_data_frame = use_data_frame
+
+#         self.reward_model_prompt = None
+#         if data_args.reward_prompt_file is not None:
+#             with open(data_args.reward_prompt_file, "r") as f:
+#                 self.reward_model_prompt = " " + f.read().strip()
+
+#         self.image_to_caption_mapping = None
+#         if data_args.image_to_caption_file is not None:
+#             with open(data_args.image_to_caption_file, "r") as f:
+#                 self.image_to_caption_mapping = json.load(f)
+
+#     def __len__(self):
+#         # return len(self.input_ids)
+#         return len(self.list_data_dict)
+
+#     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
+#         sources = self.list_data_dict[i]
+#         if isinstance(i, int):
+#             sources = [sources]
+#         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
+#         if "image" in sources[0]:
+#             image_file = self.list_data_dict[i]["image"]
+#             image_folder = self.data_args.image_folder
+#             processor = self.data_args.image_processor
+#             image = Image.open(os.path.join(image_folder, image_file)).convert("RGB")
+#             if self.data_args.image_aspect_ratio == "pad":
+
+#                 def expand2square(pil_img, background_color):
+#                     width, height = pil_img.size
+#                     if width == height:
+#                         return pil_img
+#                     elif width > height:
+#                         result = Image.new(
+#                             pil_img.mode, (width, width), background_color
+#                         )
+#                         result.paste(pil_img, (0, (width - height) // 2))
+#                         return result
+#                     else:
+#                         result = Image.new(
+#                             pil_img.mode, (height, height), background_color
+#                         )
+#                         result.paste(pil_img, ((height - width) // 2, 0))
+#                         return result
+
+#                 image = expand2square(
+#                     image, tuple(int(x * 255) for x in processor.image_mean)
+#                 )
+#                 image = processor.preprocess(image, return_tensors="pt")[
+#                     "pixel_values"
+#                 ][0]
+#             else:
+#                 image = processor.preprocess(image, return_tensors="pt")[
+#                     "pixel_values"
+#                 ][0]
+#             _sources = preprocess_multimodal(
+#                 copy.deepcopy([e["conversations"] for e in sources]), self.data_args
+#             )
+#         else:
+#             _sources = copy.deepcopy([e["conversations"] for e in sources])
+
+#         sources_ = copy.deepcopy(sources)
+#         sources_[0]["conversations"] = _sources
+
+#         data_dict = preprocess_for_reward_modeling(
+#             sources_,
+#             tokenizer=self.tokenizer,
+#             has_image=("image" in self.list_data_dict[i]),
+#             mask_target=False,
+#             query_len=self.query_len,
+#             response_len=self.response_len,
+#             use_data_frame=self.use_data_frame,
+#             reward_model_prompt=self.reward_model_prompt,
+#             image_to_caption_mapping=self.image_to_caption_mapping,
+#         )
+#         if isinstance(i, int):
+#             data_dict = dict(
+#                 input_ids=data_dict["input_ids"][0],
+#                 labels=data_dict["labels"][0],
+#                 choice=data_dict["choice"][0],
+#                 index_0=data_dict["index_0"][0],
+#                 index_1=data_dict["index_1"][0],
+#             )
+
+#         # image exist in the data
+#         if "image" in self.list_data_dict[i]:
+#             data_dict["image"] = image.to(torch.bfloat16)
+#         elif self.data_args.is_multimodal:
+#             # image does not exist in the data, but the model is multimodal
+#             crop_size = self.data_args.image_processor.crop_size
+#             data_dict["image"] = torch.zeros(3, crop_size["height"], crop_size["width"])
+
+#         return data_dict
 
 
 @dataclass
@@ -202,6 +343,31 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
 
 
+def _get_generator(seed: int) -> torch.Generator:
+    rng = torch.Generator()
+    rng.manual_seed(seed)
+    return rng
+
+
+def split_train_into_train_and_eval(
+    train_dataset: Dataset, eval_size: int, seed: int
+) -> Tuple[Dataset, Dataset]:
+    assert eval_size < len(
+        train_dataset  # noqa
+    ), "Requested eval_size cannot be equal/larger than original train data size."
+    new_train_size = len(train_dataset) - eval_size  # noqa
+    train_dataset, eval_dataset = torch.utils.data.random_split(
+        train_dataset, [new_train_size, eval_size], generator=_get_generator(seed)
+    )
+    return train_dataset, eval_dataset
+
+
+class FinalConversation:
+    def __init__(self, output_1, output_2):
+        self.output_1 = output_1
+        self.output_2 = output_2
+
+
 def main():
     hfparser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments)
@@ -226,6 +392,92 @@ def main():
     )
 
     model_id = "llava-hf/bakLlava-v1-hf"
+    processor = AutoProcessor.from_pretrained(model_id)
+    image_path = "./data/train2017"
+    with open("data/image_to_caption.json") as f:
+        caption_map = json.load(f)
+
+    def preprocess_function(examples):
+        new_examples = {
+            "input_ids_chosen": [],
+            "attention_mask_chosen": [],
+            "input_ids_rejected": [],
+            "attention_mask_rejected": [],
+        }
+        # Get the columns of a pandas DataFrame
+        for first, second, choice, image, conversations in zip(
+            examples["output_1"],
+            examples["output_2"],
+            examples["preference"],
+            examples["image"],
+            examples["conversations"],
+        ):
+            if choice == 1:
+                chosen = first
+                rejected = second
+            elif choice == 2:
+                chosen = second
+                rejected = first
+            else:
+                raise ValueError("Choice must be 1 or 2")
+            raw_image = Image.open(os.path.join(image_path, image))
+            if conversations[0]["from"] == "human":
+                starting_index = 0
+            else:
+                starting_index = 1
+            prompt = ""
+
+            assert conversations[-1]["from"] == "gpt"
+            conversations = conversations[:-1]
+            for conversation in conversations[starting_index:]:
+                if conversation["from"] == "human":
+                    role_string = "USER"
+                elif conversation["from"] == "gpt":
+                    role_string = "ASSISTANT"
+                else:
+                    role_string = "ASSISTANT"
+                if prompt == "":
+                    prompt += f"{starting_prompt}\n{role_string}: <image>\n"
+                else:
+                    prompt += f"{role_string}:"
+                prompt += f"{conversation['value']}\n"
+
+            prompt_ending = value_prompt(caption_map[image])
+            prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
+            prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
+            # TODO add the caption map
+            processed_chosen = processor(
+                prompt_chosen, raw_image, return_tensors="pt"
+            ).to(0, torch.float16)
+            processed_rejected = processor(
+                prompt_reject, raw_image, return_tensors="pt"
+            ).to(0, torch.float16)
+
+            new_examples["input_ids_chosen"].append(processed_chosen["input_ids"])
+            new_examples["attention_mask_chosen"].append(
+                processed_chosen["attention_mask"]
+            )
+            new_examples["input_ids_rejected"].append(processed_rejected["input_ids"])
+            new_examples["attention_mask_rejected"].append(
+                processed_rejected["attention_mask"]
+            )
+
+        return new_examples
+
+    train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
+    train_dataset = train_dataset.map(
+        preprocess_function,
+        batched=True,
+        num_proc=4,
+    )
+    # train_dataset = train_dataset.filter(
+    #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
+    #     and len(x["input_ids_rejected"]) <= args.reward_config.max_length
+    # )
+    import code
+
+    code.interact(local=locals())
+
     current_device = torch.cuda.current_device()
     model = LlavaForConditionalGeneration.from_pretrained(
         model_id,
@@ -233,13 +485,16 @@ def main():
         load_in_4bit=bits == 4,
         load_in_8bit=bits == 8,
         device_map={"": current_device},
-        quantization_config=bits_and_bytes_config,
+        # quantization_config=bits_and_bytes_config,
         torch_dtype=torch.bfloat16,
         trust_remote_code=False,
     )
-    processor = AutoProcessor.from_pretrained(model_id)
 
-    dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")
+    train_dataset, eval_dataset = split_train_into_train_and_eval(
+        train_dataset=train_dataset,
+        eval_size=data_args.eval_size,
+        seed=training_args.seed,
+    )
     peft_config = LoraConfig(
         r=16,
         lora_alpha=16,
@@ -252,8 +507,8 @@ def main():
         model=model,
         tokenizer=processor,
         args=training_args,
-        train_dataset=dataset["train"],
-        # eval_dataset=eval_dataset,
+        train_dataset=train_dataset,
+        eval_dataset=eval_dataset,
         peft_config=peft_config,
     )
     trainer.train()
