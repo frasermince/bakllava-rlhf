@@ -19,11 +19,16 @@ from PIL import Image
 import os
 import pandas as pd
 import requests
+import bitsandbytes as bnb
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
 """
 
+import os
+os.environ['HF_DATASETS_CACHE'] = "/workspace/.cache/huggingface/datasets"
+os.environ['HF_HOME'] = "/workspace/.cache/huggingface/misc"
+os.environ['TRANSFORMERS_CACHE'] = "/workspace/.cache/huggingface/transformers"
 
 def value_prompt(captions):
     caption_string = ""
@@ -208,6 +213,13 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     remove_unused_columns: bool = field(default=False)
     freeze_mm_mlp_adapter: bool = field(default=False)
     # From AlpacaFarm
+    length_column_name: str = field(default="length")
+    max_length: int = field(
+        default=512,
+        metadata={
+            "help": "Maximum sequence length. Sequences will be left padded to this length always during training."
+        },
+    )
     model_max_length: int = field(
         default=512,
         metadata={
@@ -367,6 +379,24 @@ class FinalConversation:
         self.output_1 = output_1
         self.output_2 = output_2
 
+def find_all_linear_names(
+    bits: int,
+    model: torch.nn.Module,
+):
+    cls = (
+        bnb.nn.Linear4bit
+        if bits == 4
+        else (bnb.nn.Linear8bitLt if bits == 8 else torch.nn.Linear)
+    )
+    lora_module_names = set()
+    for name, module in model.named_modules():
+        if isinstance(module, cls):
+            names = name.split(".")
+            lora_module_names.add(names[0] if len(names) == 1 else names[-1])
+
+    if "lm_head" in lora_module_names:  # needed for 16-bit
+        lora_module_names.remove("lm_head")
+    return list(lora_module_names)
 
 def main():
     hfparser = transformers.HfArgumentParser(
@@ -392,7 +422,7 @@ def main():
     )
 
     model_id = "llava-hf/bakLlava-v1-hf"
-    processor = AutoProcessor.from_pretrained(model_id)
+    processor = AutoProcessor.from_pretrained(model_id, model_max_length=training_args.model_max_length, padding_side="left", truncation_side="right")
     image_path = "./data/train2017"
     with open("data/image_to_caption.json") as f:
         caption_map = json.load(f)
@@ -440,16 +470,17 @@ def main():
         prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
         # TODO add the caption map
         processed_chosen = processor(
-            prompt_chosen, raw_image, return_tensors="pt"
+            prompt_chosen, raw_image, return_tensors="pt", padding='max_length', truncation=True
         )#.to(0, torch.float16)
         processed_rejected = processor(
-            prompt_reject, raw_image, return_tensors="pt"
+            prompt_reject, raw_image, return_tensors="pt", padding='max_length', truncation=True
         )#.to(0, torch.float16)
 
         new_example["input_ids_chosen"] = processed_chosen["input_ids"]
         new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
         new_example["input_ids_rejected"] = processed_rejected["input_ids"]
         new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
+        new_example["length"] = processed_chosen["input_ids"].shape
 
         return new_example
 
@@ -458,7 +489,7 @@ def main():
     train_dataset = train_dataset.map(
         preprocess_function,
         batched=False,
-        num_proc=8,
+        num_proc=4,
     )
     # train_dataset = train_dataset.filter(
     #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
@@ -472,7 +503,7 @@ def main():
         load_in_4bit=bits == 4,
         load_in_8bit=bits == 8,
         device_map={"": current_device},
-        # quantization_config=bits_and_bytes_config,
+        quantization_config=bits_and_bytes_config,
         torch_dtype=torch.bfloat16,
         trust_remote_code=False,
     )
@@ -482,11 +513,14 @@ def main():
         eval_size=data_args.eval_size,
         seed=training_args.seed,
     )
+
+    modules = find_all_linear_names(bits, model)
     peft_config = LoraConfig(
         r=16,
         lora_alpha=16,
         bias="none",
         task_type="SEQ_CLS",
+        target_modules=modules,
         modules_to_save=["scores"],
     )
 
@@ -498,6 +532,7 @@ def main():
         eval_dataset=eval_dataset,
         peft_config=peft_config,
     )
+    # import pdb; pdb.set_trace()
     trainer.train()
     trainer.save_model(training_args.output_dir)
 
