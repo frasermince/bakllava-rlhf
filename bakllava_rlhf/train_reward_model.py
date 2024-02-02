@@ -397,86 +397,73 @@ def main():
     with open("data/image_to_caption.json") as f:
         caption_map = json.load(f)
 
-    def preprocess_function(examples):
-        new_examples = {
-            "input_ids_chosen": [],
-            "attention_mask_chosen": [],
-            "input_ids_rejected": [],
-            "attention_mask_rejected": [],
-        }
+    def preprocess_function(example):
+        new_example = {}
         # Get the columns of a pandas DataFrame
-        for first, second, choice, image, conversations in zip(
-            examples["output_1"],
-            examples["output_2"],
-            examples["preference"],
-            examples["image"],
-            examples["conversations"],
-        ):
-            if choice == 1:
-                chosen = first
-                rejected = second
-            elif choice == 2:
-                chosen = second
-                rejected = first
+        first = example["output_1"]
+        second = example["output_2"]
+        choice = example["preference"]
+        image = example["image"]
+        conversations = example["conversations"]
+        if choice == 1:
+            chosen = first
+            rejected = second
+        elif choice == 2:
+            chosen = second
+            rejected = first
+        else:
+            raise ValueError("Choice must be 1 or 2")
+        raw_image = Image.open(os.path.join(image_path, image))
+        if conversations[0]["from"] == "human":
+            starting_index = 0
+        else:
+            starting_index = 1
+        prompt = ""
+
+        assert conversations[-1]["from"] == "gpt"
+        conversations = conversations[:-1]
+        for conversation in conversations[starting_index:]:
+            if conversation["from"] == "human":
+                role_string = "USER"
+            elif conversation["from"] == "gpt":
+                role_string = "ASSISTANT"
             else:
-                raise ValueError("Choice must be 1 or 2")
-            raw_image = Image.open(os.path.join(image_path, image))
-            if conversations[0]["from"] == "human":
-                starting_index = 0
+                role_string = "ASSISTANT"
+            if prompt == "":
+                prompt += f"{starting_prompt}\n{role_string}: <image>\n"
             else:
-                starting_index = 1
-            prompt = ""
+                prompt += f"{role_string}:"
+            prompt += f"{conversation['value']}\n"
 
-            assert conversations[-1]["from"] == "gpt"
-            conversations = conversations[:-1]
-            for conversation in conversations[starting_index:]:
-                if conversation["from"] == "human":
-                    role_string = "USER"
-                elif conversation["from"] == "gpt":
-                    role_string = "ASSISTANT"
-                else:
-                    role_string = "ASSISTANT"
-                if prompt == "":
-                    prompt += f"{starting_prompt}\n{role_string}: <image>\n"
-                else:
-                    prompt += f"{role_string}:"
-                prompt += f"{conversation['value']}\n"
+        prompt_ending = value_prompt(caption_map[image])
+        prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
+        prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
+        # TODO add the caption map
+        processed_chosen = processor(
+            prompt_chosen, raw_image, return_tensors="pt"
+        )#.to(0, torch.float16)
+        processed_rejected = processor(
+            prompt_reject, raw_image, return_tensors="pt"
+        )#.to(0, torch.float16)
 
-            prompt_ending = value_prompt(caption_map[image])
-            prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
-            prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
-            # TODO add the caption map
-            processed_chosen = processor(
-                prompt_chosen, raw_image, return_tensors="pt"
-            ).to(0, torch.float16)
-            processed_rejected = processor(
-                prompt_reject, raw_image, return_tensors="pt"
-            ).to(0, torch.float16)
+        new_example["input_ids_chosen"] = processed_chosen["input_ids"]
+        new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
+        new_example["input_ids_rejected"] = processed_rejected["input_ids"]
+        new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
 
-            new_examples["input_ids_chosen"].append(processed_chosen["input_ids"])
-            new_examples["attention_mask_chosen"].append(
-                processed_chosen["attention_mask"]
-            )
-            new_examples["input_ids_rejected"].append(processed_rejected["input_ids"])
-            new_examples["attention_mask_rejected"].append(
-                processed_rejected["attention_mask"]
-            )
-
-        return new_examples
+        return new_example
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
+    print("TRAIN LENGTH", len(train_dataset))
     train_dataset = train_dataset.map(
         preprocess_function,
-        batched=True,
-        num_proc=4,
+        batched=False,
+        num_proc=8,
     )
     # train_dataset = train_dataset.filter(
     #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
     #     and len(x["input_ids_rejected"]) <= args.reward_config.max_length
     # )
-    import code
-
-    code.interact(local=locals())
 
     current_device = torch.cuda.current_device()
     model = LlavaForConditionalGeneration.from_pretrained(
@@ -516,4 +503,5 @@ def main():
 
 
 if __name__ == "__main__":
+    # torch.multiprocessing.set_start_method('spawn')
     main()
