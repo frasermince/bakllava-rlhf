@@ -10,7 +10,7 @@ from trl import (
     RewardConfig,
     RewardTrainer,
 )
-from typing import Callable, Optional, Dict, Sequence, List, Literal, Tuple
+from typing import Callable, Optional, Dict, Sequence, List, Literal, Tuple, Union, Any
 from datasets import load_dataset
 from peft import LoraConfig
 from torch.utils.data import Dataset
@@ -20,6 +20,7 @@ import os
 import pandas as pd
 import requests
 import bitsandbytes as bnb
+from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
@@ -335,7 +336,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={"help": "The frequency of update steps after which to log the loss"},
     )
     group_by_length: bool = field(
-        default=True,
+        default=False,
         metadata={
             "help": "Group sequences into batches with same length. Saves memory and speeds up training considerably."
         },
@@ -372,6 +373,74 @@ def split_train_into_train_and_eval(
         train_dataset, [new_train_size, eval_size], generator=_get_generator(seed)
     )
     return train_dataset, eval_dataset
+
+@dataclass
+class RewardDataCollatorWithoutPadding:
+    r"""
+    Reward DataCollator class that pads the inputs to the maximum length of the batch.
+    Args:
+        tokenizer (`PreTrainedTokenizerBase`):
+            The tokenizer used for encoding the data.
+        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
+            padding_strategy to pass to the tokenizer.
+        max_length (`Optional[int]`, `optional`, defaults to `None`):
+            The maximum length of the sequence to be processed.
+        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
+            If set will pad the sequence to a multiple of the provided value.
+        return_tensors (`str`, `optional`, defaults to `"pt"`):
+            The tensor type to use.
+    """
+
+    tokenizer: PreTrainedTokenizerBase
+    padding: Union[bool, str] = True
+    max_length: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    return_tensors: str = "pt"
+
+    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
+        batch_chosen = []
+        batch_rejected = []
+        margin = []
+        # check if we have a margin. If we do, we need to batch it as well
+        has_margin = "margin" in features[0]
+        for feature in features:
+            # check if the keys are named as expected
+            if (
+                "input_ids_chosen" not in feature
+                or "input_ids_rejected" not in feature
+                or "attention_mask_chosen" not in feature
+                or "attention_mask_rejected" not in feature
+            ):
+                raise ValueError(
+                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
+                )
+
+            batch_chosen.append(
+                {
+                    "input_ids": feature["input_ids_chosen"],
+                    "attention_mask": feature["attention_mask_chosen"],
+                }
+            )
+            batch_rejected.append(
+                {
+                    "input_ids": feature["input_ids_rejected"],
+                    "attention_mask": feature["attention_mask_rejected"],
+                }
+            )
+            if has_margin:
+                margin.append(feature["margin"])
+        
+        batch = {
+            "input_ids_chosen": batch_chosen["input_ids"],
+            "attention_mask_chosen": batch_chosen["attention_mask"],
+            "input_ids_rejected": batch_rejected["input_ids"],
+            "attention_mask_rejected": batch_rejected["attention_mask"],
+            "return_loss": True,
+        }
+        if has_margin:
+            margin = torch.tensor(margin, dtype=torch.float)
+            batch["margin"] = margin
+        return batch
 
 
 class FinalConversation:
@@ -423,6 +492,12 @@ def main():
 
     model_id = "llava-hf/bakLlava-v1-hf"
     processor = AutoProcessor.from_pretrained(model_id, model_max_length=training_args.model_max_length, padding_side="left", truncation_side="right")
+    def pad(self, inputs):
+        print(inputs)
+        print(args[0])
+        return args[0] if args else kwargs
+
+    processor.pad = pad
     image_path = "./data/train2017"
     with open("data/image_to_caption.json") as f:
         caption_map = json.load(f)
@@ -486,6 +561,7 @@ def main():
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
     print("TRAIN LENGTH", len(train_dataset))
+    train_dataset = train_dataset.select(range(100))
     train_dataset = train_dataset.map(
         preprocess_function,
         batched=False,
@@ -508,11 +584,11 @@ def main():
         trust_remote_code=False,
     )
 
-    train_dataset, eval_dataset = split_train_into_train_and_eval(
-        train_dataset=train_dataset,
-        eval_size=data_args.eval_size,
-        seed=training_args.seed,
-    )
+    # train_dataset, eval_dataset = split_train_into_train_and_eval(
+    #     train_dataset=train_dataset,
+    #     eval_size=data_args.eval_size,
+    #     seed=training_args.seed,
+    # )
 
     modules = find_all_linear_names(bits, model)
     peft_config = LoraConfig(
@@ -523,13 +599,14 @@ def main():
         target_modules=modules,
         modules_to_save=["scores"],
     )
-
+    data_collator = RewardDataCollatorWithoutPadding(processor, max_length=training_args.max_length)
     trainer = RewardTrainer(
         model=model,
         tokenizer=processor,
         args=training_args,
         train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
+        data_collator=data_collator,
+        # eval_dataset=eval_dataset,
         peft_config=peft_config,
     )
     # import pdb; pdb.set_trace()
