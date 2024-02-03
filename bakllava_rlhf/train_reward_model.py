@@ -403,6 +403,10 @@ class RewardDataCollatorWithoutPadding:
         margin = []
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
+        input_ids_chosen = []
+        input_ids_rejected = []
+        attention_mask_chosen = []
+        attention_mask_rejected = []
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -415,28 +419,33 @@ class RewardDataCollatorWithoutPadding:
                     "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
                 )
 
-            batch_chosen.append(
-                {
-                    "input_ids": feature["input_ids_chosen"],
-                    "attention_mask": feature["attention_mask_chosen"],
-                }
-            )
-            batch_rejected.append(
-                {
-                    "input_ids": feature["input_ids_rejected"],
-                    "attention_mask": feature["attention_mask_rejected"],
-                }
-            )
-            if has_margin:
-                margin.append(feature["margin"])
+            input_ids_chosen.append(feature["input_ids_chosen"][0])
+            attention_mask_chosen.append(feature["attention_mask_chosen"][0])
+            input_ids_rejected.append(feature["input_ids_rejected"][0])
+            attention_mask_rejected.append(feature["attention_mask_rejected"][0])
+            # batch_chosen.append(
+            #     {
+            #         "input_ids": feature["input_ids_chosen"],
+            #         "attention_mask": feature["attention_mask_chosen"],
+            #     }
+            # )
+            # batch_rejected.append(
+            #     {
+            #         "input_ids": feature["input_ids_rejected"],
+            #         "attention_mask": feature["attention_mask_rejected"],
+            #     }
+            # )
+            # if has_margin:
+            #     margin.append(feature["margin"])
         
         batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
+            "input_ids_chosen": torch.tensor(input_ids_chosen),
+            "attention_mask_chosen": torch.tensor(attention_mask_chosen),
+            "input_ids_rejected": torch.tensor(input_ids_rejected),
+            "attention_mask_rejected": torch.tensor(attention_mask_rejected),
             "return_loss": True,
         }
+        # import pdb; pdb.set_trace()
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
