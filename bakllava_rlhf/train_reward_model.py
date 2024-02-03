@@ -26,10 +26,6 @@ starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
 """
 
-import os
-os.environ['HF_DATASETS_CACHE'] = "/workspace/.cache/huggingface/datasets"
-os.environ['HF_HOME'] = "/workspace/.cache/huggingface/misc"
-os.environ['TRANSFORMERS_CACHE'] = "/workspace/.cache/huggingface/transformers"
 
 def value_prompt(captions):
     caption_string = ""
@@ -207,6 +203,17 @@ class DataArguments:
     image_to_caption_file: Optional[str] = field(default=None)
 
 
+# LLAVA-RLHF used
+# BATCH_SIZE=4
+# GRAD_ACCUMULATION=1
+# A_100s=8
+# for a 13b model
+# This is 4 x 1 x 8 = 32
+# For one GPU this would be 8 x 4 x 1 = 32
+GRAD_ACCUMULATION = 4
+BATCH_SIZE = 8
+
+
 @dataclass
 class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     cache_dir: Optional[str] = field(default=None)
@@ -289,13 +296,13 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         default="paged_adamw_32bit", metadata={"help": "The optimizer to be used"}
     )
     per_device_train_batch_size: int = field(
-        default=1,
+        default=BATCH_SIZE,
         metadata={
             "help": "The training batch size per GPU. Increase for better speed."
         },
     )
     gradient_accumulation_steps: int = field(
-        default=16,
+        default=GRAD_ACCUMULATION,
         metadata={
             "help": "How many gradients to accumulate before to perform an optimizer step"
         },
@@ -303,7 +310,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     weight_decay: float = field(
         default=0.0, metadata={"help": "The L2 weight decay rate of AdamW"}
     )  # use lora dropout instead for regularization if needed
-    learning_rate: float = field(default=0.0002, metadata={"help": "The learnign rate"})
+    learning_rate: float = field(default=2e-5, metadata={"help": "The learnign rate"})
     remove_unused_columns: bool = field(
         default=False,
         metadata={"help": "Removed unused columns. Needed to make this codebase work."},
@@ -374,6 +381,7 @@ def split_train_into_train_and_eval(
     )
     return train_dataset, eval_dataset
 
+
 @dataclass
 class RewardDataCollatorWithoutPadding:
     r"""
@@ -437,7 +445,7 @@ class RewardDataCollatorWithoutPadding:
             # )
             # if has_margin:
             #     margin.append(feature["margin"])
-        
+
         batch = {
             "input_ids_chosen": torch.tensor(input_ids_chosen),
             "attention_mask_chosen": torch.tensor(attention_mask_chosen),
@@ -457,6 +465,7 @@ class FinalConversation:
         self.output_1 = output_1
         self.output_2 = output_2
 
+
 def find_all_linear_names(
     bits: int,
     model: torch.nn.Module,
@@ -475,6 +484,7 @@ def find_all_linear_names(
     if "lm_head" in lora_module_names:  # needed for 16-bit
         lora_module_names.remove("lm_head")
     return list(lora_module_names)
+
 
 def main():
     hfparser = transformers.HfArgumentParser(
@@ -500,7 +510,13 @@ def main():
     )
 
     model_id = "llava-hf/bakLlava-v1-hf"
-    processor = AutoProcessor.from_pretrained(model_id, model_max_length=training_args.model_max_length, padding_side="left", truncation_side="right")
+    processor = AutoProcessor.from_pretrained(
+        model_id,
+        model_max_length=training_args.model_max_length,
+        padding_side="left",
+        truncation_side="right",
+    )
+
     def pad(self, inputs):
         print(inputs)
         print(args[0])
@@ -554,11 +570,19 @@ def main():
         prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
         # TODO add the caption map
         processed_chosen = processor(
-            prompt_chosen, raw_image, return_tensors="pt", padding='max_length', truncation=True
-        )#.to(0, torch.float16)
+            prompt_chosen,
+            raw_image,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+        )  # .to(0, torch.float16)
         processed_rejected = processor(
-            prompt_reject, raw_image, return_tensors="pt", padding='max_length', truncation=True
-        )#.to(0, torch.float16)
+            prompt_reject,
+            raw_image,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+        )  # .to(0, torch.float16)
 
         new_example["input_ids_chosen"] = processed_chosen["input_ids"]
         new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
@@ -570,7 +594,6 @@ def main():
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
     print("TRAIN LENGTH", len(train_dataset))
-    train_dataset = train_dataset.select(range(100))
     train_dataset = train_dataset.map(
         preprocess_function,
         batched=False,
@@ -593,11 +616,11 @@ def main():
         trust_remote_code=False,
     )
 
-    # train_dataset, eval_dataset = split_train_into_train_and_eval(
-    #     train_dataset=train_dataset,
-    #     eval_size=data_args.eval_size,
-    #     seed=training_args.seed,
-    # )
+    train_dataset, eval_dataset = split_train_into_train_and_eval(
+        train_dataset=train_dataset,
+        eval_size=data_args.eval_size,
+        seed=training_args.seed,
+    )
 
     modules = find_all_linear_names(bits, model)
     peft_config = LoraConfig(
@@ -608,7 +631,9 @@ def main():
         target_modules=modules,
         modules_to_save=["scores"],
     )
-    data_collator = RewardDataCollatorWithoutPadding(processor, max_length=training_args.max_length)
+    data_collator = RewardDataCollatorWithoutPadding(
+        processor, max_length=training_args.max_length
+    )
     trainer = RewardTrainer(
         model=model,
         tokenizer=processor,
@@ -624,5 +649,4 @@ def main():
 
 
 if __name__ == "__main__":
-    # torch.multiprocessing.set_start_method('spawn')
     main()
