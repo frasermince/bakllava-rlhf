@@ -1,6 +1,7 @@
 from typing import Callable, Optional, Dict, List, Tuple, Union, Any
 import torch
 from trl import RewardConfig, RewardTrainer, is_peft_available
+from trl.trainer import compute_accuracy
 from typing import Callable, Optional, Dict, List, Tuple, Union, Any
 from torch.utils.data import Dataset
 import warnings
@@ -15,6 +16,12 @@ import torch.nn as nn
 from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from dataclasses import dataclass
+import inspect
+
+
+if is_peft_available():
+    from peft import PeftModel, get_peft_model, prepare_model_for_kbit_training
+
 
 
 @dataclass
@@ -46,6 +53,8 @@ class RewardDataCollatorWithPadding:
         margin = []
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
+        pixel_values_chosen = []
+        pixel_values_rejected = []
         for feature in features:
             # check if the keys are named as expected
             if (
@@ -70,6 +79,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
+            pixel_values_chosen.append(feature["pixel_values_chosen"])
+            pixel_values_rejected.append(feature["pixel_values_rejected"])
             if has_margin:
                 margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
@@ -91,8 +102,13 @@ class RewardDataCollatorWithPadding:
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"],
             "attention_mask_rejected": batch_rejected["attention_mask"],
+            "pixel_values_chosen": torch.tensor(pixel_values_chosen).squeeze(),
+            "pixel_values_rejected": torch.tensor(pixel_values_rejected).squeeze(),
             "return_loss": True,
         }
+
+        # import pdb
+        # pdb.set_trace()
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
@@ -121,6 +137,7 @@ class MultiModalRewardTrainer(RewardTrainer):
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
+        print("DATASET START INIT", train_dataset[0].keys())
         if type(args) == TrainingArguments:
             warnings.warn(
                 "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
@@ -226,6 +243,7 @@ class MultiModalRewardTrainer(RewardTrainer):
             self.use_reward_data_collator = True
         else:
             self.use_reward_data_collator = False
+        print("DATASET END INIT", train_dataset[0].keys())
         super().__init__(
             model,
             args,
@@ -252,6 +270,11 @@ class MultiModalRewardTrainer(RewardTrainer):
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
+        print("INPUTS", inputs.keys())
+
+
+        # import pdb
+        # pdb.set_trace()
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
