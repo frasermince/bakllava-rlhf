@@ -1,16 +1,14 @@
 from transformers import (
     BitsAndBytesConfig,
     LlavaForConditionalGeneration,
+    LlavaProcessor,
     AutoProcessor,
 )
 from dataclasses import dataclass, field
 import torch
 import transformers
-from trl import (
-    RewardConfig,
-    RewardTrainer,
-)
-from typing import Callable, Optional, Dict, Sequence, List, Literal, Tuple, Union, Any
+from trl import RewardTrainer
+from typing import Optional, List, Literal, Tuple
 from datasets import load_dataset
 from peft import LoraConfig
 from torch.utils.data import Dataset
@@ -21,6 +19,8 @@ import pandas as pd
 import requests
 import bitsandbytes as bnb
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
+import warnings
+from .multi_modal_reward_trainer import MultiModalRewardTrainer
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
@@ -382,84 +382,6 @@ def split_train_into_train_and_eval(
     return train_dataset, eval_dataset
 
 
-@dataclass
-class RewardDataCollatorWithoutPadding:
-    r"""
-    Reward DataCollator class that pads the inputs to the maximum length of the batch.
-    Args:
-        tokenizer (`PreTrainedTokenizerBase`):
-            The tokenizer used for encoding the data.
-        padding (`Union[bool, str, `PaddingStrategy`]`, `optional`, defaults to `True`):
-            padding_strategy to pass to the tokenizer.
-        max_length (`Optional[int]`, `optional`, defaults to `None`):
-            The maximum length of the sequence to be processed.
-        pad_to_multiple_of (`Optional[int]`, `optional`, defaults to `None`):
-            If set will pad the sequence to a multiple of the provided value.
-        return_tensors (`str`, `optional`, defaults to `"pt"`):
-            The tensor type to use.
-    """
-
-    tokenizer: PreTrainedTokenizerBase
-    padding: Union[bool, str] = True
-    max_length: Optional[int] = None
-    pad_to_multiple_of: Optional[int] = None
-    return_tensors: str = "pt"
-
-    def __call__(self, features: List[Dict[str, Any]]) -> Dict[str, Any]:
-        batch_chosen = []
-        batch_rejected = []
-        margin = []
-        # check if we have a margin. If we do, we need to batch it as well
-        has_margin = "margin" in features[0]
-        input_ids_chosen = []
-        input_ids_rejected = []
-        attention_mask_chosen = []
-        attention_mask_rejected = []
-        for feature in features:
-            # check if the keys are named as expected
-            if (
-                "input_ids_chosen" not in feature
-                or "input_ids_rejected" not in feature
-                or "attention_mask_chosen" not in feature
-                or "attention_mask_rejected" not in feature
-            ):
-                raise ValueError(
-                    "The features should include `input_ids_chosen`, `attention_mask_chosen`, `input_ids_rejected` and `attention_mask_rejected`"
-                )
-
-            input_ids_chosen.append(feature["input_ids_chosen"][0])
-            attention_mask_chosen.append(feature["attention_mask_chosen"][0])
-            input_ids_rejected.append(feature["input_ids_rejected"][0])
-            attention_mask_rejected.append(feature["attention_mask_rejected"][0])
-            # batch_chosen.append(
-            #     {
-            #         "input_ids": feature["input_ids_chosen"],
-            #         "attention_mask": feature["attention_mask_chosen"],
-            #     }
-            # )
-            # batch_rejected.append(
-            #     {
-            #         "input_ids": feature["input_ids_rejected"],
-            #         "attention_mask": feature["attention_mask_rejected"],
-            #     }
-            # )
-            # if has_margin:
-            #     margin.append(feature["margin"])
-
-        batch = {
-            "input_ids_chosen": torch.tensor(input_ids_chosen),
-            "attention_mask_chosen": torch.tensor(attention_mask_chosen),
-            "input_ids_rejected": torch.tensor(input_ids_rejected),
-            "attention_mask_rejected": torch.tensor(attention_mask_rejected),
-            "return_loss": True,
-        }
-        # import pdb; pdb.set_trace()
-        if has_margin:
-            margin = torch.tensor(margin, dtype=torch.float)
-            batch["margin"] = margin
-        return batch
-
-
 class FinalConversation:
     def __init__(self, output_1, output_2):
         self.output_1 = output_1
@@ -517,12 +439,6 @@ def main():
         truncation_side="right",
     )
 
-    def pad(self, inputs):
-        print(inputs)
-        print(args[0])
-        return args[0] if args else kwargs
-
-    processor.pad = pad
     image_path = "./data/train2017"
     with open("data/image_to_caption.json") as f:
         caption_map = json.load(f)
@@ -586,8 +502,11 @@ def main():
 
         new_example["input_ids_chosen"] = processed_chosen["input_ids"]
         new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
+        new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
+
         new_example["input_ids_rejected"] = processed_rejected["input_ids"]
         new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
+        new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
         new_example["length"] = processed_chosen["input_ids"].shape
 
         return new_example
@@ -631,19 +550,14 @@ def main():
         target_modules=modules,
         modules_to_save=["scores"],
     )
-    data_collator = RewardDataCollatorWithoutPadding(
-        processor, max_length=training_args.max_length
-    )
-    trainer = RewardTrainer(
+    trainer = MultiModalRewardTrainer(
         model=model,
-        tokenizer=processor,
+        processor=processor,
         args=training_args,
         train_dataset=train_dataset,
-        data_collator=data_collator,
-        # eval_dataset=eval_dataset,
+        eval_dataset=eval_dataset,
         peft_config=peft_config,
     )
-    # import pdb; pdb.set_trace()
     trainer.train()
     trainer.save_model(training_args.output_dir)
 
