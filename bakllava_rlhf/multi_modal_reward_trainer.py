@@ -276,15 +276,15 @@ class MultiModalRewardTrainer(RewardTrainer):
         # import pdb
         # pdb.set_trace()
         rewards_chosen = model(
-            input_ids=inputs["input_ids_chosen"],
-            attention_mask=inputs["attention_mask_chosen"],
-            pixel_values=inputs["pixel_values_chosen"],
+            input_ids=inputs["input_ids_chosen"].squeeze(),
+            attention_mask=inputs["attention_mask_chosen"].squeeze(),
+            pixel_values=inputs["pixel_values_chosen"].squeeze(),
             return_dict=True,
         )["logits"]
         rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"],
-            attention_mask=inputs["attention_mask_rejected"],
-            pixel_values=inputs["pixel_values_rejected"],
+            input_ids=inputs["input_ids_rejected"].squeeze(),
+            attention_mask=inputs["attention_mask_rejected"].squeeze(),
+            pixel_values=inputs["pixel_values_rejected"].squeeze(),
             return_dict=True,
         )["logits"]
         # calculate loss, optionally modulate with margin

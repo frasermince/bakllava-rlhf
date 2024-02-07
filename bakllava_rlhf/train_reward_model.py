@@ -476,7 +476,7 @@ def main():
             else:
                 role_string = "ASSISTANT"
             if prompt == "":
-                prompt += f"{starting_prompt}\n{role_string}: <image>\n"
+                prompt += f"{starting_prompt}\n{role_string}:\n"
             else:
                 prompt += f"{role_string}:"
             prompt += f"{conversation['value']}\n"
@@ -485,6 +485,7 @@ def main():
         prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
         prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
         # TODO add the caption map
+
         processed_chosen = processor(
             prompt_chosen,
             raw_image,
@@ -518,6 +519,7 @@ def main():
         batched=False,
         num_proc=4,
     )
+    print("CHECK TRAIN", train_dataset[0].keys())
     # train_dataset = train_dataset.filter(
     #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
     #     and len(x["input_ids_rejected"]) <= args.reward_config.max_length
