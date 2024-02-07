@@ -210,7 +210,7 @@ class DataArguments:
 # for a 13b model
 # This is 4 x 1 x 8 = 32
 # For one GPU this would be 8 x 4 x 1 = 32
-GRAD_ACCUMULATION = 4
+GRAD_ACCUMULATION = 2
 BATCH_SIZE = 8
 
 

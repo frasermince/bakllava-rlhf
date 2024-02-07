@@ -270,7 +270,6 @@ class MultiModalRewardTrainer(RewardTrainer):
                 " if you are using a custom data collator make sure you know what you are doing or"
                 " implement your own compute_loss method."
             )
-        print("INPUTS", inputs.keys())
 
 
         # import pdb
