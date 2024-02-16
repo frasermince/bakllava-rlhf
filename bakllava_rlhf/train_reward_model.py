@@ -1,13 +1,11 @@
 from transformers import (
     BitsAndBytesConfig,
     LlavaForConditionalGeneration,
-    LlavaProcessor,
     AutoProcessor,
 )
 from dataclasses import dataclass, field
 import torch
 import transformers
-from trl import RewardTrainer
 from typing import Optional, List, Literal, Tuple
 from datasets import load_dataset
 from peft import LoraConfig
@@ -15,12 +13,8 @@ from torch.utils.data import Dataset
 import json
 from PIL import Image
 import os
-import pandas as pd
-import requests
 import bitsandbytes as bnb
-from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizerBase
-import warnings
-from .multi_modal_reward_trainer import MultiModalRewardTrainer
+from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.

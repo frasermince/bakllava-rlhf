@@ -5,4 +5,8 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export GPUS_PER_NODE=8
 export OMP_NUM_THREADS=8
 
-poetry run python -m bakllava_rlhf.train_reward_model
+poetry run torchrun \
+    -- --standalone \
+    --nnodes=1 \
+    --nproc-per-node=$GPUS_PER_NODE \
+    bakllava_rlhf/train_reward_model.py 
