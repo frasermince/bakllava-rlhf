@@ -267,7 +267,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     )
     bits: int = field(default=4, metadata={"help": "How many bits to use."})
     lora_modules: Optional[List[str]] = field(
-        default=None,
+        default="q_proj k_proj v_proj o_proj gate_proj up_proj down_proj",
         metadata={
             "help": "Which modules to use LoRA on. If None, will use all linear layers."
         },

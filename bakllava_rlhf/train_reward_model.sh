@@ -6,7 +6,23 @@ export GPUS_PER_NODE=8
 export OMP_NUM_THREADS=8
 
 poetry run torchrun \
-    -- --standalone \
+    --standalone \
     --nnodes=1 \
     --nproc-per-node=$GPUS_PER_NODE \
-    bakllava_rlhf/train_reward_model.py 
+    bakllava_rlhf/train_reward_model.py \
+    --model_max_length 2048 \
+    --bits 16 \
+    --mm_vision_select_layer -2 \
+    --mm_use_im_start_end False \
+    --mm_use_im_patch_token False \
+    --freeze_mm_mlp_adapter True \
+    --ddp_backend "nccl" \
+    --bf16 True \
+    --ddp_find_unused_parameters False \
+    --query_len 1280 \
+    --response_len 768 \
+    --reward_prompt_file "./prompts/fact_rlhf_reward_prompt.txt" \
+    --image_to_caption_file "$DATA_DIR/image_to_caption.json" \
+    --image_aspect_ratio 'pad'
+
+
