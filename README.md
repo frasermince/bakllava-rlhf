@@ -38,3 +38,12 @@ To train the reward model run the following
 ```
 sh train_reward_model.sh
 ```
+
+I am pointing the huggingface cache to a custom location for training on RUNPROD. Feel free to comment out to use the default location. Comment out the following lines found in bakllava_rlhf/train_reward_model.sh
+
+```
+HUGGINGFACE_CACHE="/workspace/.cache/huggingface"
+export HF_DATASETS_CACHE="${HUGGINGFACE_CACHE}/datasets"
+export HF_HOME="${HUGGINGFACE_CACHE}/misc"
+export TRANSFORMERS_CACHE="${HUGGINGFACE_CACHE}/transformers"
+```
