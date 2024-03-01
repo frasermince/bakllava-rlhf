@@ -355,6 +355,12 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     resume_from_training: bool = field(
         default=False, metadata={"help": "Resume from training"}
     )
+    ddp_find_unused_parameters: bool = field(
+        default=False, metadata={"help": "Find unused parameters"}
+    )
+    ddp_backend: str = field(
+        default="ddp", metadata={"help": "Distributed backend to use"}
+    )
 
 
 def _get_generator(seed: int) -> torch.Generator:
