@@ -137,6 +137,7 @@ class MultiModalRewardTrainer(RewardTrainer):
         max_length: Optional[int] = None,
         peft_config: Optional[Dict] = None,
     ):
+        print("TRAINING ARGS", args)
         print("DATASET START INIT", train_dataset[0].keys())
         if type(args) == TrainingArguments:
             warnings.warn(

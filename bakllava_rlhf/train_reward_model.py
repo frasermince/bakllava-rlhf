@@ -543,14 +543,15 @@ def main():
         seed=training_args.seed,
     )
 
-    modules = find_all_linear_names(bits, model)
+    modules = training_args.lora_modules or find_all_linear_names(bits, model)
     peft_config = LoraConfig(
         r=16,
         lora_alpha=16,
         bias="none",
-        task_type="SEQ_CLS",
+        task_type="CAUSAL_LM",
+        lora_dropout=training_args.lora_dropout,
         target_modules=modules,
-        modules_to_save=["scores"],
+        # modules_to_save=["scores"],
     )
     trainer = MultiModalRewardTrainer(
         model=model,
