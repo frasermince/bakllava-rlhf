@@ -97,13 +97,14 @@ class RewardDataCollatorWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
+        # import pdb; pdb.set_trace()
         batch = {
             "input_ids_chosen": batch_chosen["input_ids"],
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"],
             "attention_mask_rejected": batch_rejected["attention_mask"],
-            "pixel_values_chosen": torch.tensor(pixel_values_chosen).squeeze(),
-            "pixel_values_rejected": torch.tensor(pixel_values_rejected).squeeze(),
+            "pixel_values_chosen": torch.stack(pixel_values_chosen).squeeze(),
+            "pixel_values_rejected": torch.stack(pixel_values_rejected).squeeze(),
             "return_loss": True,
         }
 
@@ -116,148 +117,150 @@ class RewardDataCollatorWithPadding:
 
 
 class MultiModalRewardTrainer(RewardTrainer):
-    def __init__(
-        self,
-        model: Union[PreTrainedModel, nn.Module] = None,
-        args: Optional[RewardConfig] = None,
-        data_collator: Optional[DataCollator] = None,
-        train_dataset: Optional[Dataset] = None,
-        eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
-        processor: Optional[LlavaProcessor] = None,
-        model_init: Optional[Callable[[], PreTrainedModel]] = None,
-        compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
-        callbacks: Optional[List[TrainerCallback]] = None,
-        optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
-            None,
-            None,
-        ),
-        preprocess_logits_for_metrics: Optional[
-            Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
-        ] = None,
-        max_length: Optional[int] = None,
-        peft_config: Optional[Dict] = None,
-    ):
-        print("TRAINING ARGS", args)
-        print("DATASET START INIT", train_dataset[0].keys())
-        if type(args) == TrainingArguments:
-            warnings.warn(
-                "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
-                FutureWarning,
-            )
-            if max_length is not None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
-        else:
-            if max_length is not None and args.max_length is not None:
-                raise ValueError(
-                    "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
-                )
-            if max_length is not None and args.max_length is None:
-                warnings.warn(
-                    "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
-                    FutureWarning,
-                )
-        if not is_peft_available() and peft_config is not None:
-            raise ValueError(
-                "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
-            )
-        elif is_peft_available() and peft_config is not None:
-            if not isinstance(model, PeftModel):
-                if getattr(model, "is_loaded_in_8bit", False) or getattr(
-                    model, "is_quantized", False
-                ):
-                    _supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
-                        inspect.signature(prepare_model_for_kbit_training).parameters
-                    )
+    # def __init__(
+    #     self,
+    #     model: Union[PreTrainedModel, nn.Module] = None,
+    #     args: Optional[RewardConfig] = None,
+    #     data_collator: Optional[DataCollator] = None,
+    #     train_dataset: Optional[Dataset] = None,
+    #     eval_dataset: Optional[Union[Dataset, Dict[str, Dataset]]] = None,
+    #     processor: Optional[LlavaProcessor] = None,
+    #     model_init: Optional[Callable[[], PreTrainedModel]] = None,
+    #     compute_metrics: Optional[Callable[[EvalPrediction], Dict]] = None,
+    #     callbacks: Optional[List[TrainerCallback]] = None,
+    #     optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = (
+    #         None,
+    #         None,
+    #     ),
+    #     preprocess_logits_for_metrics: Optional[
+    #         Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
+    #     ] = None,
+    #     max_length: Optional[int] = None,
+    #     peft_config: Optional[Dict] = None,
+    # ):
+    #     print("TRAINING ARGS", args)
+    #     print("DATASET START INIT", train_dataset[0].keys())
+    #     if type(args) == TrainingArguments:
+    #         warnings.warn(
+    #             "Using `transformers.TrainingArguments` for `args` is deprecated and will be removed in a future version. Please use `RewardConfig` instead.",
+    #             FutureWarning,
+    #         )
+    #         if max_length is not None:
+    #             warnings.warn(
+    #                 "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+    #                 FutureWarning,
+    #             )
+    #     else:
+    #         if max_length is not None and args.max_length is not None:
+    #             raise ValueError(
+    #                 "You cannot specify both `max_length` and `args.max_length`. Please use the `RewardConfig` to set `max_length` once."
+    #             )
+    #         if max_length is not None and args.max_length is None:
+    #             warnings.warn(
+    #                 "The `max_length` argument is deprecated and will be removed in a future version. Please use the `RewardConfig` to set `max_length` instead.",
+    #                 FutureWarning,
+    #             )
+    #     if not is_peft_available() and peft_config is not None:
+    #         raise ValueError(
+    #             "PEFT is not installed and you passed a `peft_config` in the trainer's kwargs, please install it to use the PEFT models"
+    #         )
+    #     elif is_peft_available() and peft_config is not None:
+    #         if not isinstance(model, PeftModel):
+    #             if getattr(model, "is_loaded_in_8bit", False) or getattr(
+    #                 model, "is_quantized", False
+    #             ):
+    #                 _supports_gc_kwargs = "gradient_checkpointing_kwargs" in list(
+    #                     inspect.signature(prepare_model_for_kbit_training).parameters
+    #                 )
 
-                    preprare_model_kwargs = {
-                        "use_gradient_checkpointing": args.gradient_checkpointing
-                    }
+    #                 preprare_model_kwargs = {
+    #                     "use_gradient_checkpointing": args.gradient_checkpointing
+    #                 }
 
-                    if (
-                        not _supports_gc_kwargs
-                        and args.gradient_checkpointing_kwargs is not None
-                    ):
-                        warnings.warn(
-                            "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
-                            "please update to the latest version of peft to use `gradient_checkpointing_kwargs`."
-                        )
-                    elif (
-                        _supports_gc_kwargs
-                        and args.gradient_checkpointing_kwargs is not None
-                    ):
-                        preprare_model_kwargs["gradient_checkpointing_kwargs"] = (
-                            args.gradient_checkpointing_kwargs
-                        )
+    #                 if (
+    #                     not _supports_gc_kwargs
+    #                     and args.gradient_checkpointing_kwargs is not None
+    #                 ):
+    #                     warnings.warn(
+    #                         "You passed `gradient_checkpointing_kwargs` in the trainer's kwargs, but your peft version does not support it. "
+    #                         "please update to the latest version of peft to use `gradient_checkpointing_kwargs`."
+    #                     )
+    #                 elif (
+    #                     _supports_gc_kwargs
+    #                     and args.gradient_checkpointing_kwargs is not None
+    #                 ):
+    #                     preprare_model_kwargs["gradient_checkpointing_kwargs"] = (
+    #                         args.gradient_checkpointing_kwargs
+    #                     )
 
-                    model = prepare_model_for_kbit_training(
-                        model, **preprare_model_kwargs
-                    )
+    #                 model = prepare_model_for_kbit_training(
+    #                     model, **preprare_model_kwargs
+    #                 )
 
-                model = get_peft_model(model, peft_config)
+    #             model = get_peft_model(model, peft_config)
 
-        if compute_metrics is None:
-            compute_metrics = compute_accuracy
+    #     if compute_metrics is None:
+    #         compute_metrics = compute_accuracy
 
-        if data_collator is None:
-            if processor is None:
-                raise ValueError(
-                    "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
-                )
-            if type(args) == TrainingArguments:
-                if max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-            else:
-                if max_length is None and args.max_length is None:
-                    warnings.warn(
-                        "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
-                        " It will be set to `512` by default, but you should do it yourself in the future.",
-                        UserWarning,
-                    )
-                    max_length = 512
-                if max_length is None and args.max_length is not None:
-                    max_length = args.max_length
+    #     if data_collator is None:
+    #         if processor is None:
+    #             raise ValueError(
+    #                 "max_length or a tokenizer must be specified when using the default RewardDataCollatorWithPadding"
+    #             )
+    #         if type(args) == TrainingArguments:
+    #             if max_length is None:
+    #                 warnings.warn(
+    #                     "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+    #                     " It will be set to `512` by default, but you should do it yourself in the future.",
+    #                     UserWarning,
+    #                 )
+    #                 max_length = 512
+    #         else:
+    #             if max_length is None and args.max_length is None:
+    #                 warnings.warn(
+    #                     "When using RewardDataCollatorWithPadding, you should set `max_length` in RewardConfig."
+    #                     " It will be set to `512` by default, but you should do it yourself in the future.",
+    #                     UserWarning,
+    #                 )
+    #                 max_length = 512
+    #             if max_length is None and args.max_length is not None:
+    #                 max_length = args.max_length
 
-            data_collator = RewardDataCollatorWithPadding(
-                processor.tokenizer, max_length=max_length
-            )
+    #         data_collator = RewardDataCollatorWithPadding(
+    #             processor.tokenizer, max_length=max_length
+    #         )
 
-            if args.remove_unused_columns:
-                try:  # for bc before https://github.com/huggingface/transformers/pull/25435
-                    args.remove_unused_columns = False
-                except FrozenInstanceError:
-                    args = replace(args, remove_unused_columns=False)
-                # warn users
-                warnings.warn(
-                    "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
-                    " we have set it for you, but you should do it yourself in the future.",
-                    UserWarning,
-                )
+    #         if args.remove_unused_columns:
+    #             try:  # for bc before https://github.com/huggingface/transformers/pull/25435
+    #                 args.remove_unused_columns = False
+    #             except FrozenInstanceError:
+    #                 args = replace(args, remove_unused_columns=False)
+    #             # warn users
+    #             warnings.warn(
+    #                 "When using RewardDataCollatorWithPadding, you should set `remove_unused_columns=False` in your RewardConfig"
+    #                 " we have set it for you, but you should do it yourself in the future.",
+    #                 UserWarning,
+    #             )
 
-            self.use_reward_data_collator = True
-        else:
-            self.use_reward_data_collator = False
-        print("DATASET END INIT", train_dataset[0].keys())
-        super().__init__(
-            model,
-            args,
-            data_collator,
-            train_dataset,
-            eval_dataset,
-            processor,
-            model_init,
-            compute_metrics,
-            callbacks,
-            optimizers,
-            preprocess_logits_for_metrics,
-        )
+    #         self.use_reward_data_collator = True
+    #     else:
+    #         self.use_reward_data_collator = False
+    #     print("DATASET END INIT", train_dataset[0].keys())
+    #     print("***ARGS", args)
+
+    #     super().__init__(
+    #         model,
+    #         args,
+    #         data_collator,
+    #         train_dataset,
+    #         eval_dataset,
+    #         processor,
+    #         model_init,
+    #         compute_metrics,
+    #         callbacks,
+    #         optimizers,
+    #         preprocess_logits_for_metrics,
+    #     )
 
     def compute_loss(
         self,

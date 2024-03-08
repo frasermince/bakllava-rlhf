@@ -6,15 +6,16 @@ from transformers import (
 from dataclasses import dataclass, field
 import torch
 import transformers
+from torch.utils.data import DataLoader, Dataset
 from typing import Optional, List, Literal, Tuple
 from datasets import load_dataset
-from peft import LoraConfig
-from torch.utils.data import Dataset
+from peft import LoraConfig, PeftModelForCausalLM
 import json
 from PIL import Image
 import os
 import bitsandbytes as bnb
-from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer
+from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer, RewardDataCollatorWithPadding
+from peft.tuners.lora import LoraLayer
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
@@ -216,6 +217,8 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     freeze_mm_mlp_adapter: bool = field(default=False)
     # From AlpacaFarm
     length_column_name: str = field(default="length")
+    dataloader_pin_memory: bool = field(default=False)
+    bf16: bool = field(default=False)
     max_length: int = field(
         default=512,
         metadata={
@@ -388,6 +391,90 @@ class FinalConversation:
         self.output_2 = output_2
 
 
+class PreprocessDataset(Dataset):
+    def __init__(self, data, processor, image_path, caption_map, starting_prompt):
+        self.data = data
+        self.processor = processor
+        self.image_path = image_path
+        self.caption_map = caption_map
+        self.starting_prompt = starting_prompt
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        example = self.data[idx]
+        new_example = {}
+        first = example["output_1"]
+        second = example["output_2"]
+        choice = example["preference"]
+        image = example["image"]
+        conversations = example["conversations"]
+        if choice == 1:
+            chosen = first
+            rejected = second
+        elif choice == 2:
+            chosen = second
+            rejected = first
+        else:
+            raise ValueError("Choice must be 1 or 2")
+        raw_image = Image.open(os.path.join(self.image_path, image))
+        if conversations[0]["from"] == "human":
+            starting_index = 0
+        else:
+            starting_index = 1
+        prompt = ""
+
+        assert conversations[-1]["from"] == "gpt"
+        conversations = conversations[:-1]
+        for conversation in conversations[starting_index:]:
+            if conversation["from"] == "human":
+                role_string = "USER"
+            elif conversation["from"] == "gpt":
+                role_string = "ASSISTANT"
+            else:
+                role_string = "ASSISTANT"
+            if prompt == "":
+                prompt += f"{self.starting_prompt}\n{role_string}:\n"
+            else:
+                prompt += f"{role_string}:"
+            prompt += f"{conversation['value']}\n"
+
+        prompt_ending = value_prompt(self.caption_map[image])
+        prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
+        prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
+
+        processed_chosen = self.processor(
+            prompt_chosen,
+            raw_image,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+        ).to(0, torch.bfloat16)
+        processed_rejected = self.processor(
+            prompt_reject,
+            raw_image,
+            return_tensors="pt",
+            padding="max_length",
+            truncation=True,
+        ).to(0, torch.bfloat16)
+
+        new_example["input_ids_chosen"] = processed_chosen["input_ids"]
+        new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
+        new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
+
+        new_example["input_ids_rejected"] = processed_rejected["input_ids"]
+        new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
+        new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
+        new_example["length"] = processed_chosen["input_ids"].shape
+
+        return new_example
+
+# To use the DataLoader
+# dataset = PreprocessDataset(data, processor, image_path, caption_map, starting_prompt)
+# dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+
 def find_all_linear_names(
     bits: int,
     model: torch.nn.Module,
@@ -514,11 +601,15 @@ def main():
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
     print("TRAIN LENGTH", len(train_dataset))
-    train_dataset = train_dataset.map(
-        preprocess_function,
-        batched=False,
-        num_proc=4,
-    )
+    # train_dataset = train_dataset.map(
+    #     preprocess_function,
+    #     batched=False,
+    #     num_proc=4,
+    # )
+    # To use the DataLoader
+    train_dataset = PreprocessDataset(train_dataset, processor, image_path, caption_map, starting_prompt)
+    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
     print("CHECK TRAIN", train_dataset[0].keys())
     # train_dataset = train_dataset.filter(
     #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
@@ -526,23 +617,7 @@ def main():
     # )
 
     current_device = torch.cuda.current_device()
-    model = LlavaForConditionalGeneration.from_pretrained(
-        model_id,
-        low_cpu_mem_usage=True,
-        load_in_4bit=bits == 4,
-        load_in_8bit=bits == 8,
-        device_map={"": current_device},
-        quantization_config=bits_and_bytes_config,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=False,
-    )
-
-    train_dataset, eval_dataset = split_train_into_train_and_eval(
-        train_dataset=train_dataset,
-        eval_size=data_args.eval_size,
-        seed=training_args.seed,
-    )
-
+    print("CURRENT DEVICE", current_device)
     modules = training_args.lora_modules or find_all_linear_names(bits, model)
     peft_config = LoraConfig(
         r=16,
@@ -553,10 +628,48 @@ def main():
         target_modules=modules,
         # modules_to_save=["scores"],
     )
+    vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
+    text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
+    configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
+    model = LlavaForConditionalGeneration(configuration).from_pretrained(
+        model_id,
+        low_cpu_mem_usage=True,
+        load_in_4bit=bits == 4,
+        load_in_8bit=bits == 8,
+        device_map={"": current_device},
+        quantization_config=bits_and_bytes_config,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=False,
+    )
+    model.multi_modal_projector.to(torch.bfloat16)
+    adapter_name = "lora_default"
+    model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
+    # model.config.torch_dtype = torch.bfloat16
+    # for name, module in model.named_modules():
+    #     if isinstance(module, LoraLayer):
+    #         if training_args.bf16:
+    #             module = module.to(torch.bfloat16)
+    #     if "lm_head" in name or "embed_tokens" in name:
+    #         if hasattr(module, "weight"):
+    #             if training_args.bf16 and module.weight.dtype == torch.float32:
+    #                 module = module.to(torch.bfloat16)
+
+
+    train_dataset, eval_dataset = split_train_into_train_and_eval(
+        train_dataset=train_dataset,
+        eval_size=data_args.eval_size,
+        seed=training_args.seed,
+    )
+
+    
+    data_collator = RewardDataCollatorWithPadding(
+        processor.tokenizer, max_length=512
+    )
     trainer = MultiModalRewardTrainer(
         model=model,
-        processor=processor,
+        tokenizer=processor,
         args=training_args,
+        data_collator=data_collator,
         train_dataset=train_dataset,
         eval_dataset=eval_dataset,
         peft_config=peft_config,
