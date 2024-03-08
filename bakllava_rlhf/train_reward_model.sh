@@ -6,7 +6,8 @@ export TRANSFORMERS_CACHE="${HUGGINGFACE_CACHE}/transformers"
 export CUDA_VISIBLE_DEVICES=0#,1,2,3,4,5,6,7
 export GPUS_PER_NODE=1
 export OMP_NUM_THREADS=1
-export TORCH_DISTRIBUTED_DEBUG=INFO
+export TORCH_DISTRIBUTED_DEBUG=DETAIL
+echo $CUDA_VISIBLE_DEVICES
 
 poetry run torchrun \
     --standalone \
