@@ -526,7 +526,7 @@ def main():
         truncation_side="right",
     )
 
-    image_path = "./data/train2017"
+    image_path = "./data/coco/train2017"
     with open("data/image_to_caption.json") as f:
         caption_map = json.load(f)
 
@@ -641,19 +641,33 @@ def main():
         torch_dtype=torch.bfloat16,
         trust_remote_code=False,
     )
-    model.multi_modal_projector.to(torch.bfloat16)
+    
     adapter_name = "lora_default"
     model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
+    model.multi_modal_projector.to(torch.bfloat16)
+    model.vision_tower.to(torch.bfloat16)
+    model.vision_tower.requires_grad_(False)
+    model.multi_modal_projector.requires_grad_(False)
+    # model.vision_tower = PeftModelForCausalLM(model.vision_tower, peft_config, adapter_name=adapter_name)
+
     # model.config.torch_dtype = torch.bfloat16
-    # for name, module in model.named_modules():
+    # for name, module in model.vision_tower.named_modules():
+    #     print("ALL", module)
+
     #     if isinstance(module, LoraLayer):
     #         if training_args.bf16:
+    #             print(module)
     #             module = module.to(torch.bfloat16)
     #     if "lm_head" in name or "embed_tokens" in name:
     #         if hasattr(module, "weight"):
     #             if training_args.bf16 and module.weight.dtype == torch.float32:
+    #                 print(module)
     #                 module = module.to(torch.bfloat16)
-
+    #     if isinstance(module, torch.nn.Conv2d):
+    #         if training_args.bf16 and module.weight.dtype == torch.float32:
+    #             print(module)
+    #             module = module.to(torch.bfloat16)
+    # import pdb; pdb.set_trace()
 
     train_dataset, eval_dataset = split_train_into_train_and_eval(
         train_dataset=train_dataset,
