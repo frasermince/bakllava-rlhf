@@ -17,6 +17,7 @@ from transformers.trainer_callback import TrainerCallback
 from transformers.trainer_utils import EvalPrediction
 from dataclasses import dataclass
 import inspect
+import pdb
 
 
 if is_peft_available():
@@ -103,13 +104,10 @@ class RewardDataCollatorWithPadding:
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"],
             "attention_mask_rejected": batch_rejected["attention_mask"],
-            "pixel_values_chosen": torch.stack(pixel_values_chosen).squeeze(),
-            "pixel_values_rejected": torch.stack(pixel_values_rejected).squeeze(),
+            "pixel_values_chosen": torch.stack(pixel_values_chosen).squeeze().requires_grad_(True),
+            "pixel_values_rejected": torch.stack(pixel_values_rejected).squeeze().requires_grad_(True),
             "return_loss": True,
         }
-
-        # import pdb
-        # pdb.set_trace()
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
