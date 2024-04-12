@@ -98,12 +98,11 @@ class RewardDataCollatorWithPadding:
             pad_to_multiple_of=self.pad_to_multiple_of,
             return_tensors=self.return_tensors,
         )
-        # import pdb; pdb.set_trace()
         batch = {
-            "input_ids_chosen": batch_chosen["input_ids"],
-            "attention_mask_chosen": batch_chosen["attention_mask"],
-            "input_ids_rejected": batch_rejected["input_ids"],
-            "attention_mask_rejected": batch_rejected["attention_mask"],
+            "input_ids_chosen": batch_chosen["input_ids"].squeeze(),
+            "attention_mask_chosen": batch_chosen["attention_mask"].squeeze(),
+            "input_ids_rejected": batch_rejected["input_ids"].squeeze(),
+            "attention_mask_rejected": batch_rejected["attention_mask"].squeeze(),
             "pixel_values_chosen": torch.stack(pixel_values_chosen).squeeze().requires_grad_(True),
             "pixel_values_rejected": torch.stack(pixel_values_rejected).squeeze().requires_grad_(True),
             "return_loss": True,
@@ -111,6 +110,7 @@ class RewardDataCollatorWithPadding:
         if has_margin:
             margin = torch.tensor(margin, dtype=torch.float)
             batch["margin"] = margin
+
         return batch
 
 
@@ -274,18 +274,16 @@ class MultiModalRewardTrainer(RewardTrainer):
             )
 
 
-        # import pdb
-        # pdb.set_trace()
         rewards_chosen = model(
-            input_ids=inputs["input_ids_chosen"].squeeze(),
-            attention_mask=inputs["attention_mask_chosen"].squeeze(),
-            pixel_values=inputs["pixel_values_chosen"].squeeze(),
-            return_dict=True,
+            input_ids=inputs["input_ids_chosen"],
+            attention_mask=inputs["attention_mask_chosen"],
+            pixel_values=inputs["pixel_values_chosen"],
+            # return_dict=True,
         )["logits"]
         rewards_rejected = model(
-            input_ids=inputs["input_ids_rejected"].squeeze(),
-            attention_mask=inputs["attention_mask_rejected"].squeeze(),
-            pixel_values=inputs["pixel_values_rejected"].squeeze(),
+            input_ids=inputs["input_ids_rejected"],
+            attention_mask=inputs["attention_mask_rejected"],
+            pixel_values=inputs["pixel_values_rejected"],
             return_dict=True,
         )["logits"]
         # calculate loss, optionally modulate with margin
