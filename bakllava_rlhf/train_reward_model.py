@@ -16,6 +16,7 @@ import os
 import bitsandbytes as bnb
 from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer, RewardDataCollatorWithPadding
 from peft.tuners.lora import LoraLayer
+import os
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
@@ -219,6 +220,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     length_column_name: str = field(default="length")
     dataloader_pin_memory: bool = field(default=False)
     bf16: bool = field(default=False)
+    half_precision_backend: str = field(default="amp")
     max_length: int = field(
         default=512,
         metadata={
@@ -450,22 +452,22 @@ class PreprocessDataset(Dataset):
             return_tensors="pt",
             padding="max_length",
             truncation=True,
-        ).to(0, torch.bfloat16)
+        )#.to(0, torch.bfloat16)
         processed_rejected = self.processor(
             prompt_reject,
             raw_image,
             return_tensors="pt",
             padding="max_length",
             truncation=True,
-        ).to(0, torch.bfloat16)
+        )#.to(0, torch.bfloat16)
 
-        new_example["input_ids_chosen"] = processed_chosen["input_ids"]
-        new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
-        new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
+        new_example["input_ids_chosen"] = torch.tensor(processed_chosen["input_ids"])
+        new_example["attention_mask_chosen"] = torch.tensor(processed_chosen["attention_mask"])
+        new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"], requires_grad=True)
 
-        new_example["input_ids_rejected"] = processed_rejected["input_ids"]
-        new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
-        new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
+        new_example["input_ids_rejected"] = torch.tensor(processed_rejected["input_ids"])
+        new_example["attention_mask_rejected"] = torch.tensor(processed_rejected["attention_mask"])
+        new_example["pixel_values_rejected"] = torch.tensor(processed_rejected["pixel_values"], requires_grad=True)
         new_example["length"] = processed_chosen["input_ids"].shape
 
         return new_example
@@ -526,10 +528,9 @@ def main():
         truncation_side="right",
     )
 
-    image_path = "./data/coco/train2017"
-    with open("data/image_to_caption.json") as f:
+    image_path = f"{os.getenv('DATA_DIR')}/coco/train2017"
+    with open(f"{os.getenv('DATA_DIR')}/image_to_caption.json") as f:
         caption_map = json.load(f)
-
     def preprocess_function(example):
         new_example = {}
         # Get the columns of a pandas DataFrame
@@ -631,25 +632,22 @@ def main():
     vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
     text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
     configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
-    model = LlavaForConditionalGeneration(configuration).from_pretrained(
+    model = LlavaForConditionalGeneration.from_pretrained(
         model_id,
         low_cpu_mem_usage=True,
-        load_in_4bit=bits == 4,
-        load_in_8bit=bits == 8,
-        device_map={"": current_device},
+        # load_in_4bit=bits == 4,
+        # load_in_8bit=bits == 8,
+        device_map="auto",
         quantization_config=bits_and_bytes_config,
-        torch_dtype=torch.bfloat16,
-        trust_remote_code=False,
+        # torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
     )
-    
+    # model.to(torch.bfloat16)
+    # model.multi_modal_projector.to(torch.bfloat16)
+    # model.to(torch.bfloat16)
     adapter_name = "lora_default"
     model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
-    model.multi_modal_projector.to(torch.bfloat16)
-    model.vision_tower.to(torch.bfloat16)
-    model.vision_tower.requires_grad_(False)
-    model.multi_modal_projector.requires_grad_(False)
-    # model.vision_tower = PeftModelForCausalLM(model.vision_tower, peft_config, adapter_name=adapter_name)
-
+    model.train()
     # model.config.torch_dtype = torch.bfloat16
     # for name, module in model.vision_tower.named_modules():
     #     print("ALL", module)
