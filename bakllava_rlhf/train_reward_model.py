@@ -17,6 +17,7 @@ import bitsandbytes as bnb
 from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer, RewardDataCollatorWithPadding
 from peft.tuners.lora import LoraLayer
 import os
+from tqdm import tqdm
 
 starting_prompt = """
 A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
@@ -281,7 +282,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     lora_alpha: float = field(default=16, metadata={"help": " Lora alpha."})
     lora_dropout: float = field(default=0.0, metadata={"help": "Lora dropout."})
     report_to: str = field(
-        default="none",
+        default="wandb",
         metadata={"help": "To use wandb or something else for reporting."},
     )
     resume_dir: Optional[str] = field(
@@ -366,6 +367,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
     ddp_backend: str = field(
         default="ddp", metadata={"help": "Distributed backend to use"}
     )
+    dataloader_num_workers: int = field(default=4, metadata={"help": "Number of dataloader workers"})
 
 
 def _get_generator(seed: int) -> torch.Generator:
@@ -395,17 +397,22 @@ class FinalConversation:
 
 class PreprocessDataset(Dataset):
     def __init__(self, data, processor, image_path, caption_map, starting_prompt):
-        self.data = data
         self.processor = processor
         self.image_path = image_path
         self.caption_map = caption_map
         self.starting_prompt = starting_prompt
+        self.processed_data = []
+        
+        for item in tqdm(data):
+            self.processed_data.append(self.process_item(item))
 
     def __len__(self):
-        return len(self.data)
+        return len(self.processed_data)
 
     def __getitem__(self, idx):
-        example = self.data[idx]
+        return self.processed_data[idx]
+
+    def process_item(self, example):
         new_example = {}
         first = example["output_1"]
         second = example["output_2"]
@@ -463,11 +470,11 @@ class PreprocessDataset(Dataset):
 
         new_example["input_ids_chosen"] = torch.tensor(processed_chosen["input_ids"])
         new_example["attention_mask_chosen"] = torch.tensor(processed_chosen["attention_mask"])
-        new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"], requires_grad=True)
+        new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"])
 
         new_example["input_ids_rejected"] = torch.tensor(processed_rejected["input_ids"])
         new_example["attention_mask_rejected"] = torch.tensor(processed_rejected["attention_mask"])
-        new_example["pixel_values_rejected"] = torch.tensor(processed_rejected["pixel_values"], requires_grad=True)
+        new_example["pixel_values_rejected"] = torch.tensor(processed_rejected["pixel_values"])
         new_example["length"] = processed_chosen["input_ids"].shape
 
         return new_example
@@ -531,74 +538,74 @@ def main():
     image_path = f"{os.getenv('DATA_DIR')}/coco/train2017"
     with open(f"{os.getenv('DATA_DIR')}/image_to_caption.json") as f:
         caption_map = json.load(f)
-    def preprocess_function(example):
-        new_example = {}
-        # Get the columns of a pandas DataFrame
-        first = example["output_1"]
-        second = example["output_2"]
-        choice = example["preference"]
-        image = example["image"]
-        conversations = example["conversations"]
-        if choice == 1:
-            chosen = first
-            rejected = second
-        elif choice == 2:
-            chosen = second
-            rejected = first
-        else:
-            raise ValueError("Choice must be 1 or 2")
-        raw_image = Image.open(os.path.join(image_path, image))
-        if conversations[0]["from"] == "human":
-            starting_index = 0
-        else:
-            starting_index = 1
-        prompt = ""
+    # def preprocess_function(example):
+    #     new_example = {}
+    #     # Get the columns of a pandas DataFrame
+    #     first = example["output_1"]
+    #     second = example["output_2"]
+    #     choice = example["preference"]
+    #     image = example["image"]
+    #     conversations = example["conversations"]
+    #     if choice == 1:
+    #         chosen = first
+    #         rejected = second
+    #     elif choice == 2:
+    #         chosen = second
+    #         rejected = first
+    #     else:
+    #         raise ValueError("Choice must be 1 or 2")
+    #     raw_image = Image.open(os.path.join(image_path, image))
+    #     if conversations[0]["from"] == "human":
+    #         starting_index = 0
+    #     else:
+    #         starting_index = 1
+    #     prompt = ""
 
-        assert conversations[-1]["from"] == "gpt"
-        conversations = conversations[:-1]
-        for conversation in conversations[starting_index:]:
-            if conversation["from"] == "human":
-                role_string = "USER"
-            elif conversation["from"] == "gpt":
-                role_string = "ASSISTANT"
-            else:
-                role_string = "ASSISTANT"
-            if prompt == "":
-                prompt += f"{starting_prompt}\n{role_string}:\n"
-            else:
-                prompt += f"{role_string}:"
-            prompt += f"{conversation['value']}\n"
+    #     assert conversations[-1]["from"] == "gpt"
+    #     conversations = conversations[:-1]
+    #     for conversation in conversations[starting_index:]:
+    #         if conversation["from"] == "human":
+    #             role_string = "USER"
+    #         elif conversation["from"] == "gpt":
+    #             role_string = "ASSISTANT"
+    #         else:
+    #             role_string = "ASSISTANT"
+    #         if prompt == "":
+    #             prompt += f"{starting_prompt}\n{role_string}:\n"
+    #         else:
+    #             prompt += f"{role_string}:"
+    #         prompt += f"{conversation['value']}\n"
 
-        prompt_ending = value_prompt(caption_map[image])
-        prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
-        prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
-        # TODO add the caption map
+    #     prompt_ending = value_prompt(caption_map[image])
+    #     prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
+    #     prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
+    #     # TODO add the caption map
 
-        processed_chosen = processor(
-            prompt_chosen,
-            raw_image,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-        )  # .to(0, torch.float16)
-        processed_rejected = processor(
-            prompt_reject,
-            raw_image,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-        )  # .to(0, torch.float16)
+    #     processed_chosen = processor(
+    #         prompt_chosen,
+    #         raw_image,
+    #         return_tensors="pt",
+    #         padding="max_length",
+    #         truncation=True,
+    #     )  # .to(0, torch.float16)
+    #     processed_rejected = processor(
+    #         prompt_reject,
+    #         raw_image,
+    #         return_tensors="pt",
+    #         padding="max_length",
+    #         truncation=True,
+    #     )  # .to(0, torch.float16)
 
-        new_example["input_ids_chosen"] = processed_chosen["input_ids"]
-        new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
-        new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
+    #     new_example["input_ids_chosen"] = processed_chosen["input_ids"]
+    #     new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
+    #     new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
 
-        new_example["input_ids_rejected"] = processed_rejected["input_ids"]
-        new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
-        new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
-        new_example["length"] = processed_chosen["input_ids"].shape
+    #     new_example["input_ids_rejected"] = processed_rejected["input_ids"]
+    #     new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
+    #     new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
+    #     new_example["length"] = processed_chosen["input_ids"].shape
 
-        return new_example
+    #     return new_example
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
     print("TRAIN LENGTH", len(train_dataset))
