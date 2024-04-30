@@ -1,6 +1,8 @@
 from transformers import (
     BitsAndBytesConfig,
     LlavaForConditionalGeneration,
+    AutoModelForSequenceClassification,
+    # Idefics2ForConditionalGeneration,
     AutoProcessor,
 )
 from dataclasses import dataclass, field
@@ -8,151 +10,18 @@ import torch
 import transformers
 from torch.utils.data import DataLoader, Dataset
 from typing import Optional, List, Literal, Tuple
-from datasets import load_dataset
+from datasets import load_dataset, Image
 from peft import LoraConfig, PeftModelForCausalLM
 import json
-from PIL import Image
 import os
 import bitsandbytes as bnb
 from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer, RewardDataCollatorWithPadding
+from bakllava_rlhf.llava_for_sequence_classification import LlavaForSequenceClassification
 from peft.tuners.lora import LoraLayer
 import os
 from tqdm import tqdm
+from bakllava_rlhf.preprocess_dataset import preprocess_data, preprocess_data_batch
 
-starting_prompt = """
-A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
-"""
-
-
-def value_prompt(captions):
-    caption_string = ""
-    for caption in captions:
-        caption_string += f"{caption}\n"
-    return f"""
-USER: Please evaluate the quality of your last response. There are several dimensions you should consider in your evaluation:
-
-1. Accurate: The AI should provide factual and accurate information from the image, and refrain from making statements that are not supported by the image or inconsistent with the image. Specifically, the AI's response should be fully supported by the combination of the following captions:
-{caption_string}
-2. Helpful: The AI’s response should precisely serve the user's needs and interests, while grounding the response in the image.
-3. Language Natural: The AI should employ language that flows smoothly and is free from repetitive or awkward constructs.
-4. Concise: The AI should efficiently address the task or answer the question, communicating the necessary information with brevity and clarity.
-
-A good response should be accurate, helpful, language natural, and concise. ASSISTANT: Following your definitions, the quality score of my last response is
-  """
-
-
-# class BinaryRewardModelingDataset(Dataset):
-#     def __init__(
-#         self,
-#         data: Sequence[dict],
-#         tokenizer: transformers.PreTrainedTokenizer,
-#         df_postprocessor: Optional[Callable] = None,
-#         query_len: Optional[int] = None,
-#         response_len: Optional[int] = None,
-#         use_data_frame: bool = True,
-#         data_args: Optional[Dict] = None,
-#     ):
-#         super(BinaryRewardModelingDataset, self).__init__()
-#         list_data_dict = json.load(open(data_args.dataset_path, "r"))
-#         self.tokenizer = tokenizer
-#         self.list_data_dict = list_data_dict
-#         self.data_args = data_args
-
-#         self.query_len = query_len
-#         self.response_len = response_len
-#         self.use_data_frame = use_data_frame
-
-#         self.reward_model_prompt = None
-#         if data_args.reward_prompt_file is not None:
-#             with open(data_args.reward_prompt_file, "r") as f:
-#                 self.reward_model_prompt = " " + f.read().strip()
-
-#         self.image_to_caption_mapping = None
-#         if data_args.image_to_caption_file is not None:
-#             with open(data_args.image_to_caption_file, "r") as f:
-#                 self.image_to_caption_mapping = json.load(f)
-
-#     def __len__(self):
-#         # return len(self.input_ids)
-#         return len(self.list_data_dict)
-
-#     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-#         sources = self.list_data_dict[i]
-#         if isinstance(i, int):
-#             sources = [sources]
-#         assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
-#         if "image" in sources[0]:
-#             image_file = self.list_data_dict[i]["image"]
-#             image_folder = self.data_args.image_folder
-#             processor = self.data_args.image_processor
-#             image = Image.open(os.path.join(image_folder, image_file)).convert("RGB")
-#             if self.data_args.image_aspect_ratio == "pad":
-
-#                 def expand2square(pil_img, background_color):
-#                     width, height = pil_img.size
-#                     if width == height:
-#                         return pil_img
-#                     elif width > height:
-#                         result = Image.new(
-#                             pil_img.mode, (width, width), background_color
-#                         )
-#                         result.paste(pil_img, (0, (width - height) // 2))
-#                         return result
-#                     else:
-#                         result = Image.new(
-#                             pil_img.mode, (height, height), background_color
-#                         )
-#                         result.paste(pil_img, ((height - width) // 2, 0))
-#                         return result
-
-#                 image = expand2square(
-#                     image, tuple(int(x * 255) for x in processor.image_mean)
-#                 )
-#                 image = processor.preprocess(image, return_tensors="pt")[
-#                     "pixel_values"
-#                 ][0]
-#             else:
-#                 image = processor.preprocess(image, return_tensors="pt")[
-#                     "pixel_values"
-#                 ][0]
-#             _sources = preprocess_multimodal(
-#                 copy.deepcopy([e["conversations"] for e in sources]), self.data_args
-#             )
-#         else:
-#             _sources = copy.deepcopy([e["conversations"] for e in sources])
-
-#         sources_ = copy.deepcopy(sources)
-#         sources_[0]["conversations"] = _sources
-
-#         data_dict = preprocess_for_reward_modeling(
-#             sources_,
-#             tokenizer=self.tokenizer,
-#             has_image=("image" in self.list_data_dict[i]),
-#             mask_target=False,
-#             query_len=self.query_len,
-#             response_len=self.response_len,
-#             use_data_frame=self.use_data_frame,
-#             reward_model_prompt=self.reward_model_prompt,
-#             image_to_caption_mapping=self.image_to_caption_mapping,
-#         )
-#         if isinstance(i, int):
-#             data_dict = dict(
-#                 input_ids=data_dict["input_ids"][0],
-#                 labels=data_dict["labels"][0],
-#                 choice=data_dict["choice"][0],
-#                 index_0=data_dict["index_0"][0],
-#                 index_1=data_dict["index_1"][0],
-#             )
-
-#         # image exist in the data
-#         if "image" in self.list_data_dict[i]:
-#             data_dict["image"] = image.to(torch.bfloat16)
-#         elif self.data_args.is_multimodal:
-#             # image does not exist in the data, but the model is multimodal
-#             crop_size = self.data_args.image_processor.crop_size
-#             data_dict["image"] = torch.zeros(3, crop_size["height"], crop_size["width"])
-
-#         return data_dict
 
 
 @dataclass
@@ -207,7 +76,7 @@ class DataArguments:
 # for a 13b model
 # This is 4 x 1 x 8 = 32
 # For one GPU this would be 8 x 4 x 1 = 32
-GRAD_ACCUMULATION = 2
+GRAD_ACCUMULATION = 4
 BATCH_SIZE = 8
 
 
@@ -233,6 +102,9 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         metadata={
             "help": "Maximum sequence length. Sequences will be left padded to this length always during training."
         },
+    )
+    num_train_epochs: int = field(
+        default=1
     )
     query_len: int = field(default=None, metadata={"help": "Length of the query."})
     response_len: int = field(
@@ -322,7 +194,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         },
     )
     gradient_checkpointing: bool = field(
-        default=True,
+        default=False,
         metadata={"help": "Use gradient checkpointing. You want to use this."},
     )
     do_train: bool = field(
@@ -395,89 +267,6 @@ class FinalConversation:
         self.output_2 = output_2
 
 
-class PreprocessDataset(Dataset):
-    def __init__(self, data, processor, image_path, caption_map, starting_prompt):
-        self.processor = processor
-        self.image_path = image_path
-        self.caption_map = caption_map
-        self.starting_prompt = starting_prompt
-        self.processed_data = []
-        
-        for item in tqdm(data):
-            self.processed_data.append(self.process_item(item))
-
-    def __len__(self):
-        return len(self.processed_data)
-
-    def __getitem__(self, idx):
-        return self.processed_data[idx]
-
-    def process_item(self, example):
-        new_example = {}
-        first = example["output_1"]
-        second = example["output_2"]
-        choice = example["preference"]
-        image = example["image"]
-        conversations = example["conversations"]
-        if choice == 1:
-            chosen = first
-            rejected = second
-        elif choice == 2:
-            chosen = second
-            rejected = first
-        else:
-            raise ValueError("Choice must be 1 or 2")
-        raw_image = Image.open(os.path.join(self.image_path, image))
-        if conversations[0]["from"] == "human":
-            starting_index = 0
-        else:
-            starting_index = 1
-        prompt = ""
-
-        assert conversations[-1]["from"] == "gpt"
-        conversations = conversations[:-1]
-        for conversation in conversations[starting_index:]:
-            if conversation["from"] == "human":
-                role_string = "USER"
-            elif conversation["from"] == "gpt":
-                role_string = "ASSISTANT"
-            else:
-                role_string = "ASSISTANT"
-            if prompt == "":
-                prompt += f"{self.starting_prompt}\n{role_string}:\n"
-            else:
-                prompt += f"{role_string}:"
-            prompt += f"{conversation['value']}\n"
-
-        prompt_ending = value_prompt(self.caption_map[image])
-        prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
-        prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
-
-        processed_chosen = self.processor(
-            prompt_chosen,
-            raw_image,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-        )#.to(0, torch.bfloat16)
-        processed_rejected = self.processor(
-            prompt_reject,
-            raw_image,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-        )#.to(0, torch.bfloat16)
-
-        new_example["input_ids_chosen"] = torch.tensor(processed_chosen["input_ids"])
-        new_example["attention_mask_chosen"] = torch.tensor(processed_chosen["attention_mask"])
-        new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"])
-
-        new_example["input_ids_rejected"] = torch.tensor(processed_rejected["input_ids"])
-        new_example["attention_mask_rejected"] = torch.tensor(processed_rejected["attention_mask"])
-        new_example["pixel_values_rejected"] = torch.tensor(processed_rejected["pixel_values"])
-        new_example["length"] = processed_chosen["input_ids"].shape
-
-        return new_example
 
 # To use the DataLoader
 # dataset = PreprocessDataset(data, processor, image_path, caption_map, starting_prompt)
@@ -528,6 +317,7 @@ def main():
     )
 
     model_id = "llava-hf/bakLlava-v1-hf"
+    # model_id = "HuggingFaceM4/idefics2-8b-base"
     processor = AutoProcessor.from_pretrained(
         model_id,
         model_max_length=training_args.model_max_length,
@@ -608,14 +398,18 @@ def main():
     #     return new_example
 
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
-    print("TRAIN LENGTH", len(train_dataset))
+    def image_path_item(item):
+        item["image"] = os.path.join(image_path, item["image"])
+        return item
+    train_dataset = train_dataset.map(image_path_item).cast_column("image", Image()).map(lambda item: preprocess_data_batch(item, processor, image_path, caption_map), batched=True, batch_size=150, num_proc=4)
+    # print("TRAIN LENGTH", len(train_dataset))
     # train_dataset = train_dataset.map(
     #     preprocess_function,
     #     batched=False,
     #     num_proc=4,
     # )
     # To use the DataLoader
-    train_dataset = PreprocessDataset(train_dataset, processor, image_path, caption_map, starting_prompt)
+    # train_dataset = PreprocessDataset(train_dataset, processor, image_path, caption_map)
     # dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
     print("CHECK TRAIN", train_dataset[0].keys())
@@ -634,13 +428,16 @@ def main():
         task_type="CAUSAL_LM",
         lora_dropout=training_args.lora_dropout,
         target_modules=modules,
+        # use_dora=True,
         # modules_to_save=["scores"],
     )
     vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
     text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
     configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
-    model = LlavaForConditionalGeneration.from_pretrained(
+    # model = Idefics2ForConditionalGeneration.from_pretrained(
+    model = LlavaForSequenceClassification.from_pretrained(
         model_id,
+        num_labels=1,
         low_cpu_mem_usage=True,
         # load_in_4bit=bits == 4,
         # load_in_8bit=bits == 8,
@@ -648,6 +445,7 @@ def main():
         quantization_config=bits_and_bytes_config,
         # torch_dtype=torch.bfloat16,
         trust_remote_code=True,
+        # attn_implementation="flash_attention_2",
     )
     # model.to(torch.bfloat16)
     # model.multi_modal_projector.to(torch.bfloat16)

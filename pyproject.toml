@@ -12,13 +12,16 @@ transformers= { git = "https://github.com/frasermince/transformers", branch = "f
 datasets = "^2.16.1"
 trl = "^0.8.1"
 torch = "^2.1.2"
-peft = "^0.7.1"
+peft = "^0.10.0"
 bitsandbytes = "^0.42.0"
 pillow = "^10.2.0"
 nvidia-ml-py3 = "^7.352.0"
 accelerate = "^0.29.2"
 wandb = "^0.16.6"
+flash-attn = { version = "^2.5.7"}
 
+[tool.poetry.optional-dependencies]
+flash-attn = { version = "^2.5.7"}
 
 [build-system]
 requires = ["poetry-core"]

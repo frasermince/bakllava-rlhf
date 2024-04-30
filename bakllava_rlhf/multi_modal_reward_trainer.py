@@ -54,10 +54,11 @@ class RewardDataCollatorWithPadding:
         margin = []
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
-        pixel_values_chosen = []
-        pixel_values_rejected = []
+        pixel_values = []
+        # pixel_attention_mask = []
         for feature in features:
             # check if the keys are named as expected
+            # print(feature.keys())
             if (
                 "input_ids_chosen" not in feature
                 or "input_ids_rejected" not in feature
@@ -80,8 +81,8 @@ class RewardDataCollatorWithPadding:
                     "attention_mask": feature["attention_mask_rejected"],
                 }
             )
-            pixel_values_chosen.append(feature["pixel_values_chosen"])
-            pixel_values_rejected.append(feature["pixel_values_rejected"])
+            pixel_values.append(feature["pixel_values"])
+            # pixel_attention_mask.append(feature["pixel_attention_mask"])
             if has_margin:
                 margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
@@ -100,11 +101,11 @@ class RewardDataCollatorWithPadding:
         )
         batch = {
             "input_ids_chosen": batch_chosen["input_ids"].squeeze(),
-            "attention_mask_chosen": batch_chosen["attention_mask"].squeeze(),
+            "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"].squeeze(),
-            "attention_mask_rejected": batch_rejected["attention_mask"].squeeze(),
-            "pixel_values_chosen": torch.stack(pixel_values_chosen).squeeze().requires_grad_(True),
-            "pixel_values_rejected": torch.stack(pixel_values_rejected).squeeze().requires_grad_(True),
+            "attention_mask_rejected": batch_rejected["attention_mask"],
+            "pixel_values": torch.tensor(pixel_values).requires_grad_(True),
+            # "pixel_attention_mask": torch.tensor(pixel_attention_mask),
             "return_loss": True,
         }
         if has_margin:
@@ -277,16 +278,21 @@ class MultiModalRewardTrainer(RewardTrainer):
         rewards_chosen = model(
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
-            pixel_values=inputs["pixel_values_chosen"],
-            # return_dict=True,
+            pixel_values=inputs["pixel_values"],
+            # pixel_attention_mask=inputs["pixel_attention_mask"],
+            return_dict=True,
         )["logits"]
         rewards_rejected = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
-            pixel_values=inputs["pixel_values_rejected"],
+            pixel_values=inputs["pixel_values"],
+            # pixel_attention_mask=inputs["pixel_attention_mask"],
             return_dict=True,
         )["logits"]
+        # import pdb; pdb.set_trace()
         # calculate loss, optionally modulate with margin
+        # print("REWARDS CHOSEN", rewards_chosen)
+        # print("REWARDS REJECTED", rewards_rejected)
         if "margin" in inputs:
             loss = -nn.functional.logsigmoid(
                 rewards_chosen - rewards_rejected - inputs["margin"]

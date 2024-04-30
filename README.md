@@ -12,6 +12,10 @@ This will look slightly different if we use different algorithms but is a useful
 ## Installation
 
 Run poetry install
+If you want to use flash attention I suggest creating a virtualenv and then running:
+```
+PIP_NO_BUILD_ISOLATION=1 pip install -e .
+```
 
 ## Data setup
 
