@@ -8,10 +8,11 @@ export CUDA_VISIBLE_DEVICES=0#,1,2,3,4,5,6,7
 export GPUS_PER_NODE=1
 export OMP_NUM_THREADS=1
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
+NUM_EPOCHS=1
 
 echo $CUDA_VISIBLE_DEVICES
 
-poetry run torchrun \
+torchrun \
     --standalone \
     --nnodes=1 \
     --nproc-per-node=$GPUS_PER_NODE \
@@ -30,6 +31,7 @@ poetry run torchrun \
     --lora_modules q_proj k_proj v_proj o_proj gate_proj up_proj down_proj \
     --reward_prompt_file "./prompts/fact_rlhf_reward_prompt.txt" \
     --image_to_caption_file "$DATA_DIR/image_to_caption.json" \
+    --num_train_epochs $NUM_EPOCHS \
     --image_aspect_ratio 'pad'
 
 

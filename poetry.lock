@@ -2295,7 +2295,7 @@ vision = ["Pillow (>=10.0.1,<=15.0)"]
 type = "git"
 url = "https://github.com/frasermince/transformers"
 reference = "frasermince/half-precision-llava-fix"
-resolved_reference = "24b42441db40ae908796c3e77c537bb8e390cb84"
+resolved_reference = "0db9a95bc2a727d400496f50175ac33bdcc2a60a"
 
 [[package]]
 name = "triton"
