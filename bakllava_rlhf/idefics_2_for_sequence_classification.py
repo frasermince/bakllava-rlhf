@@ -1,24 +1,25 @@
 from typing import Optional, List, Literal, Tuple, Union
 from transformers import (
     BitsAndBytesConfig,
-    LlavaForConditionalGeneration,
-    LlavaPreTrainedModel,
+    Idefics2Model,
+    Idefics2PreTrainedModel,
 )
 from transformers.modeling_outputs import SequenceClassifierOutputWithPast, SequenceClassifierOutput
 import torch
 from torch import nn
 
-class LlavaForSequenceClassification(LlavaPreTrainedModel):
+class Idefics2ForSequenceClassification(Idefics2PreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.config = config
+        self.config.use_cache = False
 
-        self.model = LlavaForConditionalGeneration(config)
+        self.model = Idefics2Model(config)
         # classifier_dropout = (
         #     config.classifier_dropout if config.classifier_dropout is not None else config.hidden_dropout_prob
         # )
-        self.score = nn.Linear(config.text_config.hidden_size, 1, bias=False)
+        self.classifier = nn.Linear(config.text_config.hidden_size, 1, bias=False)
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -28,6 +29,7 @@ class LlavaForSequenceClassification(LlavaPreTrainedModel):
         input_ids: Optional[torch.Tensor] = None,
         pixel_values: Optional[torch.Tensor] = None,
         attention_mask: Optional[torch.Tensor] = None,
+        pixel_attention_mask: Optional[torch.Tensor] = None,
         labels: Optional[torch.Tensor] = None,
         inputs_embeds: Optional[torch.Tensor] = None,
         output_attentions: Optional[bool] = None,
@@ -45,6 +47,7 @@ class LlavaForSequenceClassification(LlavaPreTrainedModel):
         transformer_outputs = self.model(
             input_ids,
             pixel_values=pixel_values,
+            pixel_attention_mask=pixel_attention_mask,
             attention_mask=attention_mask,
             inputs_embeds=inputs_embeds,
             output_attentions=output_attentions,
@@ -54,21 +57,21 @@ class LlavaForSequenceClassification(LlavaPreTrainedModel):
 
         hidden_states = transformer_outputs["hidden_states"][-1]
 
-        logits = self.score(hidden_states)
+        logits = self.classifier(hidden_states)
 
         if input_ids is not None:
             batch_size = input_ids.shape[0]
         else:
             batch_size = inputs_embeds.shape[0]
 
-        if self.config.pad_token_id is None and batch_size != 1:
+        if self.config.text_config.pad_token_id is None and batch_size != 1:
             raise ValueError("Cannot handle batch sizes > 1 if no padding token is defined.")
-        if self.config.pad_token_id is None:
+        if self.config.text_config.pad_token_id is None:
             sequence_lengths = -1
         else:
             if input_ids is not None:
                 # if no pad token found, use modulo instead of reverse indexing for ONNX compatibility
-                sequence_lengths = torch.eq(input_ids, self.config.pad_token_id).int().argmax(-1) - 1
+                sequence_lengths = torch.eq(input_ids, self.config.text_config.pad_token_id).int().argmax(-1) - 1
                 sequence_lengths = sequence_lengths % input_ids.shape[-1]
                 sequence_lengths = sequence_lengths.to(logits.device)
             else:
@@ -79,24 +82,24 @@ class LlavaForSequenceClassification(LlavaPreTrainedModel):
         loss = None
         if labels is not None:
             labels = labels.to(logits.device)
-            if self.config.problem_type is None:
+            if self.config.text_config.problem_type is None:
                 if self.num_labels == 1:
-                    self.config.problem_type = "regression"
+                    self.config.text_config.problem_type = "regression"
                 elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-                    self.config.problem_type = "single_label_classification"
+                    self.config.text_config.problem_type = "single_label_classification"
                 else:
-                    self.config.problem_type = "multi_label_classification"
+                    self.config.text_config.problem_type = "multi_label_classification"
 
-            if self.config.problem_type == "regression":
+            if self.config.text_config.problem_type == "regression":
                 loss_fct = MSELoss()
                 if self.num_labels == 1:
                     loss = loss_fct(pooled_logits.squeeze(), labels.squeeze())
                 else:
                     loss = loss_fct(pooled_logits, labels)
-            elif self.config.problem_type == "single_label_classification":
+            elif self.config.text_config.problem_type == "single_label_classification":
                 loss_fct = CrossEntropyLoss()
                 loss = loss_fct(pooled_logits.view(-1, self.num_labels), labels.view(-1))
-            elif self.config.problem_type == "multi_label_classification":
+            elif self.config.text_config.problem_type == "multi_label_classification":
                 loss_fct = BCEWithLogitsLoss()
                 loss = loss_fct(pooled_logits, labels)
         if not return_dict:

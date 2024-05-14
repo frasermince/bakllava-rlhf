@@ -1,8 +1,8 @@
 from transformers import (
     BitsAndBytesConfig,
-    LlavaForConditionalGeneration,
+    # LlavaForConditionalGeneration,
     AutoModelForSequenceClassification,
-    # Idefics2ForConditionalGeneration,
+    IdeficsModel,
     AutoProcessor,
 )
 from dataclasses import dataclass, field
@@ -16,9 +16,10 @@ import json
 import os
 import bitsandbytes as bnb
 from bakllava_rlhf.multi_modal_reward_trainer import MultiModalRewardTrainer, RewardDataCollatorWithPadding
-from bakllava_rlhf.llava_for_sequence_classification import LlavaForSequenceClassification
+from bakllava_rlhf.idefics_2_for_sequence_classification import Idefics2ForSequenceClassification
 from peft.tuners.lora import LoraLayer
 import os
+import wandb
 from tqdm import tqdm
 from bakllava_rlhf.preprocess_dataset import preprocess_data, preprocess_data_batch
 
@@ -77,7 +78,8 @@ class DataArguments:
 # This is 4 x 1 x 8 = 32
 # For one GPU this would be 8 x 4 x 1 = 32
 GRAD_ACCUMULATION = 4
-BATCH_SIZE = 8
+BATCH_SIZE = 4
+VALIDATE_MODEL_TRAINED = False
 
 
 @dataclass
@@ -194,7 +196,7 @@ class TrainingArguments(transformers.Seq2SeqTrainingArguments):
         },
     )
     gradient_checkpointing: bool = field(
-        default=False,
+        default=True,
         metadata={"help": "Use gradient checkpointing. You want to use this."},
     )
     do_train: bool = field(
@@ -313,111 +315,32 @@ def main():
         bnb_4bit_compute_dtype=torch.bfloat16,
         bnb_4bit_use_double_quant=True,
         bnb_4bit_quant_type="nf4",
-        llm_int8_skip_modules=["mm_projector", "lm_head"],
+        llm_int8_skip_modules=["mm_projector", "lm_head", "classifier"],
     )
 
-    model_id = "llava-hf/bakLlava-v1-hf"
-    # model_id = "HuggingFaceM4/idefics2-8b-base"
+    # model_id = "llava-hf/bakLlava-v1-hf"
+    model_id = "HuggingFaceM4/idefics2-8b-base"
     processor = AutoProcessor.from_pretrained(
         model_id,
         model_max_length=training_args.model_max_length,
         padding_side="left",
         truncation_side="right",
+        size={"longest_edge": 448, "shortest_edge": 378} 
     )
+    processor.image_processor.do_image_splitting = False
 
     image_path = f"{os.getenv('DATA_DIR')}/coco/train2017"
     with open(f"{os.getenv('DATA_DIR')}/image_to_caption.json") as f:
         caption_map = json.load(f)
-    # def preprocess_function(example):
-    #     new_example = {}
-    #     # Get the columns of a pandas DataFrame
-    #     first = example["output_1"]
-    #     second = example["output_2"]
-    #     choice = example["preference"]
-    #     image = example["image"]
-    #     conversations = example["conversations"]
-    #     if choice == 1:
-    #         chosen = first
-    #         rejected = second
-    #     elif choice == 2:
-    #         chosen = second
-    #         rejected = first
-    #     else:
-    #         raise ValueError("Choice must be 1 or 2")
-    #     raw_image = Image.open(os.path.join(image_path, image))
-    #     if conversations[0]["from"] == "human":
-    #         starting_index = 0
-    #     else:
-    #         starting_index = 1
-    #     prompt = ""
-
-    #     assert conversations[-1]["from"] == "gpt"
-    #     conversations = conversations[:-1]
-    #     for conversation in conversations[starting_index:]:
-    #         if conversation["from"] == "human":
-    #             role_string = "USER"
-    #         elif conversation["from"] == "gpt":
-    #             role_string = "ASSISTANT"
-    #         else:
-    #             role_string = "ASSISTANT"
-    #         if prompt == "":
-    #             prompt += f"{starting_prompt}\n{role_string}:\n"
-    #         else:
-    #             prompt += f"{role_string}:"
-    #         prompt += f"{conversation['value']}\n"
-
-    #     prompt_ending = value_prompt(caption_map[image])
-    #     prompt_chosen = prompt + f"ASSISTANT: {chosen}\n{prompt_ending}"
-    #     prompt_reject = prompt + f"ASSISTANT: {rejected}\n{prompt_ending}"
-    #     # TODO add the caption map
-
-    #     processed_chosen = processor(
-    #         prompt_chosen,
-    #         raw_image,
-    #         return_tensors="pt",
-    #         padding="max_length",
-    #         truncation=True,
-    #     )  # .to(0, torch.float16)
-    #     processed_rejected = processor(
-    #         prompt_reject,
-    #         raw_image,
-    #         return_tensors="pt",
-    #         padding="max_length",
-    #         truncation=True,
-    #     )  # .to(0, torch.float16)
-
-    #     new_example["input_ids_chosen"] = processed_chosen["input_ids"]
-    #     new_example["attention_mask_chosen"] = processed_chosen["attention_mask"]
-    #     new_example["pixel_values_chosen"] = processed_chosen["pixel_values"]
-
-    #     new_example["input_ids_rejected"] = processed_rejected["input_ids"]
-    #     new_example["attention_mask_rejected"] = processed_rejected["attention_mask"]
-    #     new_example["pixel_values_rejected"] = processed_rejected["pixel_values"]
-    #     new_example["length"] = processed_chosen["input_ids"].shape
-
-    #     return new_example
-
+    
     train_dataset = load_dataset("zhiqings/LLaVA-Human-Preference-10K")["train"]
     def image_path_item(item):
         item["image"] = os.path.join(image_path, item["image"])
         return item
     train_dataset = train_dataset.map(image_path_item).cast_column("image", Image()).map(lambda item: preprocess_data_batch(item, processor, image_path, caption_map), batched=True, batch_size=150, num_proc=4)
-    # print("TRAIN LENGTH", len(train_dataset))
-    # train_dataset = train_dataset.map(
-    #     preprocess_function,
-    #     batched=False,
-    #     num_proc=4,
-    # )
-    # To use the DataLoader
-    # train_dataset = PreprocessDataset(train_dataset, processor, image_path, caption_map)
-    # dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
+    
     print("CHECK TRAIN", train_dataset[0].keys())
-    # train_dataset = train_dataset.filter(
-    #     lambda x: len(x["input_ids_chosen"]) <= args.reward_config.max_length
-    #     and len(x["input_ids_rejected"]) <= args.reward_config.max_length
-    # )
-
+    
     current_device = torch.cuda.current_device()
     print("CURRENT DEVICE", current_device)
     modules = training_args.lora_modules or find_all_linear_names(bits, model)
@@ -429,30 +352,38 @@ def main():
         lora_dropout=training_args.lora_dropout,
         target_modules=modules,
         # use_dora=True,
-        # modules_to_save=["scores"],
+        modules_to_save=["classifier"],
     )
-    vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
-    text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
-    configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
+    # vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
+    # text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
+    # configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
     # model = Idefics2ForConditionalGeneration.from_pretrained(
-    model = LlavaForSequenceClassification.from_pretrained(
-        model_id,
-        num_labels=1,
-        low_cpu_mem_usage=True,
-        # load_in_4bit=bits == 4,
-        # load_in_8bit=bits == 8,
-        device_map="auto",
-        quantization_config=bits_and_bytes_config,
-        # torch_dtype=torch.bfloat16,
-        trust_remote_code=True,
-        # attn_implementation="flash_attention_2",
-    )
+    # with wandb.init(entity="frasermince") as run:
+    #     # Pass the name and version of Artifact
+    #     my_model_name = "unchart/huggingface/model-gxj6ln6q:v0"
+    #     my_model_artifact = run.use_artifact(my_model_name, type='model')
+
+    #     # Download model weights to a folder and return the path
+    #     model_dir = my_model_artifact.download()
+    #     print("MODEL DIR", model_dir)
+    #     model = Idefics2ForSequenceClassification.from_pretrained(
+    #         model_dir,
+    #         num_labels=1,
+    #         low_cpu_mem_usage=True,
+    #         # load_in_4bit=bits == 4,
+    #         # load_in_8bit=bits == 8,
+    #         device_map="auto",
+    #         quantization_config=bits_and_bytes_config,
+    #         torch_dtype=torch.bfloat16,
+    #         trust_remote_code=True,
+    #         # attn_implementation="flash_attention_2",
+    #     )
+    
     # model.to(torch.bfloat16)
     # model.multi_modal_projector.to(torch.bfloat16)
     # model.to(torch.bfloat16)
     adapter_name = "lora_default"
-    model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
-    model.train()
+    # model.train()
     # model.config.torch_dtype = torch.bfloat16
     # for name, module in model.vision_tower.named_modules():
     #     print("ALL", module)
@@ -482,17 +413,96 @@ def main():
     data_collator = RewardDataCollatorWithPadding(
         processor.tokenizer, max_length=512
     )
-    trainer = MultiModalRewardTrainer(
-        model=model,
-        tokenizer=processor,
-        args=training_args,
-        data_collator=data_collator,
-        train_dataset=train_dataset,
-        eval_dataset=eval_dataset,
-        peft_config=peft_config,
-    )
-    trainer.train()
-    trainer.save_model(training_args.output_dir)
+    if False:
+        model = Idefics2ForSequenceClassification.from_pretrained(
+            model_id,
+            num_labels=1,
+            low_cpu_mem_usage=True,
+            # load_in_4bit=bits == 4,
+            # load_in_8bit=bits == 8,
+            device_map="auto",
+            # quantization_config=bits_and_bytes_config,
+            torch_dtype=torch.bfloat16,
+            trust_remote_code=True,
+            # attn_implementation="flash_attention_2",
+        )
+        model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
+        training_args.gradient_checkpointing_kwargs = {"use_reentrant":False}
+        trainer = MultiModalRewardTrainer(
+            model=model,
+            tokenizer=processor,
+            args=training_args,
+            data_collator=data_collator,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            peft_config=peft_config,
+        )
+        trainer.train()
+        trainer.save_model(f"{training_args.output_dir}/final")
+    else:
+        trained = True
+        results_chosen = []
+        results_rejected = []
+        print("TRAINED:", trained)
+        if not VALIDATE_MODEL_TRAINED:
+            model = Idefics2ForSequenceClassification.from_pretrained(
+                model_id,
+                num_labels=1,
+                low_cpu_mem_usage=True,
+                # load_in_4bit=bits == 4,
+                # load_in_8bit=bits == 8,
+                device_map="auto",
+                # quantization_config=bits_and_bytes_config,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                # attn_implementation="flash_attention_2",
+            )
+            model = PeftModelForCausalLM.from_pretrained(model, "./output/final/lora_default") 
+        else:
+            model = Idefics2ForSequenceClassification.from_pretrained(
+                model_id,
+                num_labels=1,
+                low_cpu_mem_usage=True,
+                # load_in_4bit=bits == 4,
+                # load_in_8bit=bits == 8,
+                device_map="auto",
+                # quantization_config=bits_and_bytes_config,
+                torch_dtype=torch.bfloat16,
+                trust_remote_code=True,
+                # attn_implementation="flash_attention_2",
+            )
+            model = PeftModelForCausalLM(model, peft_config, adapter_name=adapter_name)
+        batch_size = 3
+        eval_examples = batch_size * 120
+        model.eval()
+        for i in tqdm(range(0, eval_examples, batch_size)):
+            print(i)
+            inputs = train_dataset[i:i+batch_size]
+            # print(torch.tensor(inputs["input_ids_chosen"]).shape)
+            rewards = model(
+                input_ids=torch.tensor(inputs["input_ids_chosen"]).to(current_device),
+                attention_mask=torch.tensor(inputs["attention_mask_chosen"]).to(current_device),
+                pixel_values=torch.tensor(inputs["pixel_values"]).to(current_device),
+                pixel_attention_mask=torch.tensor(inputs["pixel_attention_mask"]).to(current_device),
+                return_dict=True,
+            )["logits"]
+            results_chosen.extend(rewards.squeeze().tolist())
+            rewards = None
+            rewards = model(
+                input_ids=torch.tensor(inputs["input_ids_rejected"]).to(current_device),
+                attention_mask=torch.tensor(inputs["attention_mask_rejected"]).to(current_device),
+                pixel_values=torch.tensor(inputs["pixel_values"]).to(current_device),
+                pixel_attention_mask=torch.tensor(inputs["pixel_attention_mask"]).to(current_device),
+                return_dict=True,
+            )["logits"]
+            results_rejected.extend(rewards.squeeze().tolist())
+            rewards = None
+
+        results = [1 if chosen > rejected else 0 for chosen, rejected in zip(results_chosen, results_rejected)]
+
+        num_correct = sum(results)
+        num_total = len(results)
+        print(f"{num_correct}/{num_total} ({num_correct/num_total})")
 
 
 if __name__ == "__main__":

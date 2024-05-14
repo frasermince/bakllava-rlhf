@@ -55,7 +55,7 @@ class RewardDataCollatorWithPadding:
         # check if we have a margin. If we do, we need to batch it as well
         has_margin = "margin" in features[0]
         pixel_values = []
-        # pixel_attention_mask = []
+        pixel_attention_mask = []
         for feature in features:
             # check if the keys are named as expected
             # print(feature.keys())
@@ -82,7 +82,7 @@ class RewardDataCollatorWithPadding:
                 }
             )
             pixel_values.append(feature["pixel_values"])
-            # pixel_attention_mask.append(feature["pixel_attention_mask"])
+            pixel_attention_mask.append(feature["pixel_attention_mask"])
             if has_margin:
                 margin.append(feature["margin"])
         batch_chosen = self.tokenizer.pad(
@@ -104,8 +104,8 @@ class RewardDataCollatorWithPadding:
             "attention_mask_chosen": batch_chosen["attention_mask"],
             "input_ids_rejected": batch_rejected["input_ids"].squeeze(),
             "attention_mask_rejected": batch_rejected["attention_mask"],
-            "pixel_values": torch.tensor(pixel_values).requires_grad_(True),
-            # "pixel_attention_mask": torch.tensor(pixel_attention_mask),
+            "pixel_values": torch.tensor(pixel_values),
+            "pixel_attention_mask": torch.tensor(pixel_attention_mask),
             "return_loss": True,
         }
         if has_margin:
@@ -279,14 +279,14 @@ class MultiModalRewardTrainer(RewardTrainer):
             input_ids=inputs["input_ids_chosen"],
             attention_mask=inputs["attention_mask_chosen"],
             pixel_values=inputs["pixel_values"],
-            # pixel_attention_mask=inputs["pixel_attention_mask"],
+            pixel_attention_mask=inputs["pixel_attention_mask"],
             return_dict=True,
         )["logits"]
         rewards_rejected = model(
             input_ids=inputs["input_ids_rejected"],
             attention_mask=inputs["attention_mask_rejected"],
             pixel_values=inputs["pixel_values"],
-            # pixel_attention_mask=inputs["pixel_attention_mask"],
+            pixel_attention_mask=inputs["pixel_attention_mask"],
             return_dict=True,
         )["logits"]
         # import pdb; pdb.set_trace()
