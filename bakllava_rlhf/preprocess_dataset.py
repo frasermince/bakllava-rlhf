@@ -153,7 +153,7 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
     choice = example["preference"]
     images = []
     for i in example["image"]:
-      images.append(i)
+      images.append([i])
     conversations_batch = example["conversations"]
     chosen = []
     rejected = []
@@ -195,7 +195,7 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
           if is_start == True:
             is_start == False
 
-      filename = images[i].filename.split("/")[-1]
+      filename = images[i][0].filename.split("/")[-1]
       prompt_ending = value_prompt(caption_map[filename])
       prompt_chosen = prompt + f"ASSISTANT: {chosen[i]['value']}\n{prompt_ending}"
       prompt_reject = prompt + f"ASSISTANT: {rejected[i]['value']}\n{prompt_ending}"
@@ -222,6 +222,8 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
         truncation=True,
     )#.to(0, torch.bfloat16)
 
+    assert torch.all(processed_chosen["pixel_attention_mask"] == processed_rejected["pixel_attention_mask"])
+
     # new_example["input_ids_chosen"] = torch.tensor(processed_chosen["input_ids"])
     # new_example["attention_mask_chosen"] = torch.tensor(processed_chosen["attention_mask"])
     # new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"])
@@ -240,6 +242,6 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
         "attention_mask_chosen": processed_chosen["attention_mask"],
         "attention_mask_rejected": processed_rejected["attention_mask"],
         "pixel_values": processed_chosen["pixel_values"],
-        # "pixel_attention_mask": processed_chosen["pixel_attention_mask"],
+        "pixel_attention_mask": processed_chosen["pixel_attention_mask"],
     }
     return data_result
