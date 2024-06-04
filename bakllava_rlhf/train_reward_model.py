@@ -263,18 +263,6 @@ def split_train_into_train_and_eval(
     return train_dataset, eval_dataset
 
 
-class FinalConversation:
-    def __init__(self, output_1, output_2):
-        self.output_1 = output_1
-        self.output_2 = output_2
-
-
-
-# To use the DataLoader
-# dataset = PreprocessDataset(data, processor, image_path, caption_map, starting_prompt)
-# dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-
-
 def find_all_linear_names(
     bits: int,
     model: torch.nn.Module,
@@ -354,55 +342,9 @@ def main():
         # use_dora=True,
         modules_to_save=["classifier"],
     )
-    # vision_config = transformers.CLIPVisionConfig(torch_dtype=torch.bfloat16)
-    # text_config = transformers.MistralConfig(torch_dtype=torch.bfloat16)
-    # configuration = transformers.LlavaConfig(vision_config, text_config, torch_dtype=torch.bfloat16)
-    # model = Idefics2ForConditionalGeneration.from_pretrained(
-    # with wandb.init(entity="frasermince") as run:
-    #     # Pass the name and version of Artifact
-    #     my_model_name = "unchart/huggingface/model-gxj6ln6q:v0"
-    #     my_model_artifact = run.use_artifact(my_model_name, type='model')
-
-    #     # Download model weights to a folder and return the path
-    #     model_dir = my_model_artifact.download()
-    #     print("MODEL DIR", model_dir)
-    #     model = Idefics2ForSequenceClassification.from_pretrained(
-    #         model_dir,
-    #         num_labels=1,
-    #         low_cpu_mem_usage=True,
-    #         # load_in_4bit=bits == 4,
-    #         # load_in_8bit=bits == 8,
-    #         device_map="auto",
-    #         quantization_config=bits_and_bytes_config,
-    #         torch_dtype=torch.bfloat16,
-    #         trust_remote_code=True,
-    #         # attn_implementation="flash_attention_2",
-    #     )
     
-    # model.to(torch.bfloat16)
-    # model.multi_modal_projector.to(torch.bfloat16)
-    # model.to(torch.bfloat16)
     adapter_name = "lora_default"
-    # model.train()
-    # model.config.torch_dtype = torch.bfloat16
-    # for name, module in model.vision_tower.named_modules():
-    #     print("ALL", module)
-
-    #     if isinstance(module, LoraLayer):
-    #         if training_args.bf16:
-    #             print(module)
-    #             module = module.to(torch.bfloat16)
-    #     if "lm_head" in name or "embed_tokens" in name:
-    #         if hasattr(module, "weight"):
-    #             if training_args.bf16 and module.weight.dtype == torch.float32:
-    #                 print(module)
-    #                 module = module.to(torch.bfloat16)
-    #     if isinstance(module, torch.nn.Conv2d):
-    #         if training_args.bf16 and module.weight.dtype == torch.float32:
-    #             print(module)
-    #             module = module.to(torch.bfloat16)
-    # import pdb; pdb.set_trace()
-
+    
     train_dataset, eval_dataset = split_train_into_train_and_eval(
         train_dataset=train_dataset,
         eval_size=data_args.eval_size,

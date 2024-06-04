@@ -167,15 +167,6 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
         rejected.append(first[i])
 
     
-    # if choice == 1:
-    #     chosen = first
-    #     rejected = second
-    # elif choice == 2:
-    #     chosen = second
-    #     rejected = first
-    # else:
-    #     raise ValueError("Choice must be 1 or 2")
-
     start = time.time()
     chosen_prompts = []
     rejected_prompts = []
@@ -224,17 +215,6 @@ def preprocess_data_batch(example, processor, image_path, caption_map):
 
     assert torch.all(processed_chosen["pixel_attention_mask"] == processed_rejected["pixel_attention_mask"])
 
-    # new_example["input_ids_chosen"] = torch.tensor(processed_chosen["input_ids"])
-    # new_example["attention_mask_chosen"] = torch.tensor(processed_chosen["attention_mask"])
-    # new_example["pixel_values_chosen"] = torch.tensor(processed_chosen["pixel_values"])
-    # new_example["pixel_attention_mask_chosen"] = torch.tensor(processed_chosen["pixel_attention_mask"])
-
-    # new_example["input_ids_rejected"] = torch.tensor(processed_rejected["input_ids"])
-    # new_example["attention_mask_rejected"] = torch.tensor(processed_rejected["attention_mask"])
-    # new_example["pixel_values_rejected"] = torch.tensor(processed_rejected["pixel_values"])
-    # new_example["pixel_attention_mask_rejected"] = torch.tensor(processed_rejected["pixel_attention_mask"])
-    # assert torch.all(processed_chosen["pixel_values"] == processed_rejected["pixel_values"])
-    # assert torch.all(processed_chosen["pixel_attention_mask"] == processed_rejected["pixel_attention_mask"])
 
     data_result = {
         "input_ids_chosen": processed_chosen["input_ids"],
