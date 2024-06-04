@@ -413,7 +413,7 @@ def main():
     data_collator = RewardDataCollatorWithPadding(
         processor.tokenizer, max_length=512
     )
-    if False:
+    if VALIDATE_MODEL_TRAINED:
         model = Idefics2ForSequenceClassification.from_pretrained(
             model_id,
             num_labels=1,
